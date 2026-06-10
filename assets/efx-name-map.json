@@ -1,0 +1,63 @@
+{
+  "efx/0x0B.wav": {
+    "name": "main_menu_selection",
+    "description": "Main menu selection sound.",
+    "confirmed_by": "user_audition"
+  },
+  "efx/0x0C.wav": {
+    "name": "ration_use",
+    "description": "Ration use sound.",
+    "confirmed_by": "user_audition"
+  },
+  "efx/0x10.wav": {
+    "name": "codec_ring_incoming",
+    "description": "Incoming codec call ring; someone calls Snake.",
+    "confirmed_by": "user_audition"
+  },
+  "efx/0x15.wav": {
+    "name": "item_menu_open",
+    "description": "Item menu open sound.",
+    "confirmed_by": "user_audition"
+  },
+  "efx/0x16.wav": {
+    "name": "item_equip",
+    "description": "Item equip sound.",
+    "confirmed_by": "user_audition"
+  },
+  "efx/0x17.wav": {
+    "name": "item_menu_move",
+    "description": "Item menu up/down movement sound.",
+    "confirmed_by": "user_audition"
+  },
+  "efx/0x1F.wav": {
+    "name": "codec_menu",
+    "description": "Codec menu sound; tentative.",
+    "confirmed_by": "user_audition",
+    "confidence": "tentative"
+  },
+  "efx/0x23.wav": {
+    "name": "access_denied",
+    "description": "Access denied sound.",
+    "confirmed_by": "user_audition"
+  },
+  "efx/0x53.wav": {
+    "name": "enemy_discovered",
+    "description": "Discovered by enemy sound.",
+    "confirmed_by": "user_audition"
+  },
+  "efx/0x55.wav": {
+    "name": "codec_frequency_change",
+    "description": "Codec frequency change when moving left/right.",
+    "confirmed_by": "user_audition"
+  },
+  "efx/0x56.wav": {
+    "name": "codec_ring_outgoing",
+    "description": "Snake calls someone / outgoing codec call ring.",
+    "confirmed_by": "user_audition"
+  },
+  "efx/0x57.wav": {
+    "name": "codec_conversation_closed",
+    "description": "Codec conversation closed / hang-up sound.",
+    "confirmed_by": "user_audition"
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "characters": [
+    {
+      "id": "campbell",
+      "displayName": "Roy Campbell",
+      "speakerName": "Colonel",
+      "frequency": "140.85",
+      "avatar": "campbell_serious",
+      "enabled": true
+    },
+    {
+      "id": "mei_ling",
+      "displayName": "Mei Ling",
+      "speakerName": "Mei Ling",
+      "frequency": "140.96",
+      "avatar": "mei_ling_normal",
+      "enabled": true
+    },
+    {
+      "id": "meryl",
+      "displayName": "Meryl Silverburgh",
+      "speakerName": "Meryl",
+      "frequency": "140.15",
+      "avatar": "meryl_normal",
+      "enabled": true
+    },
+    {
+      "id": "miller",
+      "displayName": "Master Miller",
+      "speakerName": "Miller",
+      "frequency": "141.80",
+      "avatar": "miller_normal",
+      "enabled": true
+    },
+    {
+      "id": "naomi",
+      "displayName": "Naomi Hunter",
+      "speakerName": "Naomi",
+      "frequency": "140.85",
+      "avatar": "naomi_normal",
+      "enabled": true
+    },
+    {
+      "id": "nastasha",
+      "displayName": "Nastasha Romanenko",
+      "speakerName": "Nastasha",
+      "frequency": "141.52",
+      "avatar": "nastasha_normal",
+      "enabled": true
+    },
+    {
+      "id": "otacon",
+      "displayName": "Dr. Hal Emmerich",
+      "speakerName": "Otacon",
+      "frequency": "141.12",
+      "avatar": "otacon_normal",
+      "enabled": true
+    }
+  ]
+}

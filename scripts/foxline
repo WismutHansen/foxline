@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ALLOW_BASH=0
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/foxline [--allow-bash]
+
+Starts foxline in tmux with STT, bridge, and vite windows.
+
+Options:
+  --allow-bash   Include bash in CODEC_PI_TOOLS for the pi rpc brain
+  -h, --help     Show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --allow-bash)
+      ALLOW_BASH=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+SESSION="${FOXLINE_TMUX_SESSION:-foxline}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CHARACTER="${CODEC_CHARACTER:-campbell}"
+AUTO_WARMUP="${CODEC_AUTO_WARMUP:-0}"
+WARMUP_TURNS="${CODEC_WARMUP_TURNS:-2}"
+SESSION_DIR="${CODEC_SESSION_DIR:-$ROOT/sessions/codec-demo-$(date -u +%Y%m%dT%H%M%SZ)}"
+PI_SESSION_DIR="${CODEC_PI_SESSION_DIR:-$SESSION_DIR/pi-rpc-sessions}"
+OPEN_BROWSER="${CODEC_OPEN_BROWSER:-1}"
+WEB_URL="${CODEC_WEB_URL:-http://127.0.0.1:${VITE_PORT:-5173}/}"
+OPEN_BROWSER_DELAY="${CODEC_OPEN_BROWSER_DELAY:-2}"
+
+PI_TOOLS_DEFAULT="read,write,edit,ls,find,grep,pi_file_searcher,pi_internet_search"
+PI_TOOLS="${CODEC_PI_TOOLS:-$PI_TOOLS_DEFAULT}"
+PI_FILLERS="${CODEC_PI_FILLERS:-1}"
+PI_NO_EXTENSIONS="${CODEC_PI_NO_EXTENSIONS:-0}"
+PI_NO_CONTEXT_FILES="${CODEC_PI_NO_CONTEXT_FILES:-1}"
+if [[ "$ALLOW_BASH" == "1" ]] && [[ ",${PI_TOOLS}," != *",bash,"* ]]; then
+  PI_TOOLS="${PI_TOOLS},bash"
+fi
+
+open_default_browser() {
+  local url="$1"
+  if command -v open >/dev/null 2>&1; then open "$url"
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$url"
+  elif command -v cmd.exe >/dev/null 2>&1; then cmd.exe /c start "" "$url"
+  else return 1
+  fi
+}
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "tmux is required. Install it first or run scripts/setup-deps.sh." >&2
+  exit 1
+fi
+
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+  echo "tmux session '$SESSION' already exists."
+  if [[ -n "${TMUX:-}" ]]; then exec tmux switch-client -t "$SESSION"; fi
+  exec tmux attach -t "$SESSION"
+fi
+
+tmux new-session -d -s "$SESSION" -n stt -c "$ROOT" \
+  'scripts/start-services.sh --no-transcript-server --foreground; echo; echo "Parakeet+Silero STT exited. Press enter to close."; read'
+
+tmux new-window -t "$SESSION" -n bridge -c "$ROOT" \
+  "sleep 2; CODEC_PI_TOOLS='$PI_TOOLS' CODEC_PI_FILLERS='$PI_FILLERS' CODEC_PI_NO_EXTENSIONS='$PI_NO_EXTENSIONS' CODEC_PI_NO_CONTEXT_FILES='$PI_NO_CONTEXT_FILES' CODEC_TTS_MODE=worker CODEC_SESSION_DIR='$SESSION_DIR' CODEC_PI_SESSION_DIR='$PI_SESSION_DIR' CODEC_BRAIN_MODE=pi bun run server/bridge.ts --character='$CHARACTER' --continue; echo; echo 'Bridge exited. Press enter to close.'; read"
+
+if [[ "$AUTO_WARMUP" == "1" ]]; then
+  echo "Running warmup before opening frontend (turns=$WARMUP_TURNS)..."
+  uv run --script "$ROOT/scripts/codec-warmup.py" --ws "ws://127.0.0.1:${CODEC_BRIDGE_PORT:-8770}" --turns "$WARMUP_TURNS" --new-session || true
+fi
+
+tmux new-window -t "$SESSION" -n vite -c "$ROOT" \
+  "sleep 1; bun run dev; echo; echo 'Vite exited. Press enter to close.'; read"
+
+tmux select-window -t "$SESSION:vite"
+
+if [[ "$OPEN_BROWSER" == "1" ]]; then
+  (sleep "$OPEN_BROWSER_DELAY"; open_default_browser "$WEB_URL" >/dev/null 2>&1 || true) &
+  echo "Opening browser: $WEB_URL"
+fi
+
+echo "Started tmux session '$SESSION' with pi-rpc, parakeet-silero STT, Qwen3-TTS worker. session_dir=$SESSION_DIR"
+echo "Pi tools: $PI_TOOLS"
+echo "Pi fillers: $PI_FILLERS | Pi no-extensions: $PI_NO_EXTENSIONS | Pi no-context-files: $PI_NO_CONTEXT_FILES"
+echo "Attach/detach: tmux attach -t $SESSION / Ctrl-b d"
+if [[ -n "${TMUX:-}" ]]; then exec tmux switch-client -t "$SESSION"; fi
+exec tmux attach -t "$SESSION"
