@@ -5,13 +5,15 @@
 Foxline is a local Metal Gear Solid-style codec runtime: voice input (STT), character-driven dialogue via Pi RPC, and streamed voice output (TTS) in a browser UI.
 
 Default runtime models/components:
+
 - Brain (LLM): whatever `CODEC_PI_MODEL` points to in your local Pi model registry (example in this README uses LM Studio `gemma-4-26b-a4b-it`)
 - STT: Parakeet + Silero VAD
 - TTS: Qwen3-TTS worker (MLX)
 
 Current platform status:
-- Mac-first at the moment due to the Qwen3-TTS MLX worker setup
-- Fully local runtime: STT/TTS/LLM can run entirely on your machine (when backed by local providers/models)
+
+- Mac-first at the moment due to the Qwen3-TTS MLX worker setup but hopefully won't be too hard to port to other platforms
+- Fully local runtime: STT/TTS/LLM can run entirely on your machine (when backed by local providers/models). ~30GB of shared memory required.
 
 > [!IMPORTANT]
 > This repo does not ship copyrighted Metal Gear Solid assets. You must provide legally obtained source media (PS1 NTSC/US discs, GOG installer, or an existing PC install directory).
@@ -19,7 +21,7 @@ Current platform status:
 ## Quick start
 
 1. Put source media in `./sources/`.
-2. Run installer:
+2. Run installer (takes a while for all steps, be patient):
 
 ```bash
 scripts/install-assets.sh -y
