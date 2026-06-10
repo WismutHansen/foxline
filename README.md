@@ -126,3 +126,12 @@ Shipped metadata only (no audio/game art):
 - `assets/mgs-vox-bank-index.json`
 - `assets/face-name-map.json`
 - `assets/reference_transcript_replacements.json`
+
+## Attributions
+
+Foxline builds on and learns from these upstream projects:
+
+- [Pi coding agent (pi.dev)](https://pi.dev) by Mario Zechner and contributors: local coding-agent runtime used in RPC mode as Foxline's character brain interface.
+- [PiBot / Pipi](https://github.com/badlogic/pibot) by Mario Zechner: worker-based local voice assistant architecture, parakeet.cpp STT worker integration, and Qwen3-TTS worker design.
+- [parakeet.cpp](https://github.com/mudler/parakeet.cpp) by Ettore Di Giacinto and contributors: local C/C++ Parakeet/Nemotron ASR inference and GGUF model support.
+- [qwen3_tts_rs](https://github.com/badlogic/qwen3_tts_rs): Rust Qwen3-TTS inference.
