@@ -114,9 +114,10 @@ function faceFor(set: FaceSet, level: number, active: boolean, tick: number) {
 }
 
 function useCodecDemo() {
+  const autoMicEnabled = import.meta.env.VITE_CODEC_AUTO_MIC !== 'false';
   const [phase, setPhase] = useState<CodecPhase>('idle');
   const [transcript, setTranscript] = useState<TranscriptLine[]>([{ speaker: 'System', text: 'Codec receiver ready. Open Memory to choose support.', at: now() }]);
-  const [assistantResponse, setAssistantResponse] = useState('Awaiting frequency activation.');
+  const [assistantResponse, setAssistantResponse] = useState(autoMicEnabled ? 'Mic auto-starting...' : 'Awaiting frequency activation.');
   const [supportCharacter, setSupportCharacter] = useState<CodecCharacter>(fallbackCharacter);
   const [characters, setCharacters] = useState<CodecCharacterInfo[]>([]);
   const charactersRef = useRef<CodecCharacterInfo[]>([]);
@@ -143,6 +144,8 @@ function useCodecDemo() {
   const bargeInMinLevel = Number(import.meta.env.VITE_CODEC_BARGE_IN_MIN_LEVEL || 0.18);
   const bargeInLevelWindowMs = Number(import.meta.env.VITE_CODEC_BARGE_IN_LEVEL_WINDOW_MS || 1200);
   const autoResumeListeningAfterSwitch = useRef(false);
+  const listeningActive = useRef(false);
+  const startListeningInFlight = useRef(false);
   const lastHighSnakeLevelAt = useRef(0);
 
   useEffect(() => { phaseRef.current = phase; }, [phase]);
@@ -162,6 +165,7 @@ function useCodecDemo() {
         setCharacters(event.characters || []);
         setConnected(true);
         setTranscript((t) => [...t, { speaker: 'System', text: `${displaySpeakerName(character, event.characters || [])} codec bridge online.`, at: now() }]);
+        autoStartListening('bridge_ready');
       }
       if (event.type === 'character_switched') {
         void sfx.play('codec_tune');
@@ -170,7 +174,7 @@ function useCodecDemo() {
         setCharacters(event.characters || characters);
         assistantText.current = '';
         assistantLineIndex.current = null;
-        setAssistantResponse('Awaiting frequency activation.');
+        setAssistantResponse(autoMicEnabled ? 'Mic auto-starting...' : 'Awaiting frequency activation.');
         setLiveCaption('');
         setPhase('idle');
         setTranscript([{ speaker: 'System', text: `Memory tuned to ${displaySpeakerName(character, event.characters || charactersRef.current)}. Fresh channel opened.`, at: now() }]);
@@ -245,12 +249,20 @@ function useCodecDemo() {
       if (event.type === 'error') { setError(event.message); setPhase('error'); }
     });
     bridge.current.connect();
+    const autoMicTimer = window.setTimeout(() => autoStartListening('mount'), 300);
     const timer = window.setInterval(() => setCampbellLevel(player.current?.getLevel() || 0), 33);
-    return () => { off(); window.clearInterval(timer); };
+    return () => { off(); window.clearTimeout(autoMicTimer); window.clearInterval(timer); };
   }, []);
 
+  function autoStartListening(reason: string) {
+    if (!autoMicEnabled || listeningActive.current || startListeningInFlight.current) return;
+    bridge.current?.trace('auto_mic_start', { reason });
+    void startListening(false);
+  }
+
   async function startListening(manualMode = false) {
-    if (pttActive) return;
+    if (manualMode ? pttActive : listeningActive.current || startListeningInFlight.current) return;
+    startListeningInFlight.current = true;
     player.current?.unlock(); // must run synchronously inside the tap gesture for mobile audio output
     sfx.unlock();
     if (phaseRef.current === 'idle') void sfx.play('codec_call');
@@ -331,14 +343,18 @@ function useCodecDemo() {
       bridge.current?.trace('stt_start_attempt', { manualMode });
       await stt.current.start(manualMode);
       bridge.current?.trace('stt_started', { manualMode });
+      listeningActive.current = true;
       setPttActive(manualMode);
       setPhase('listening');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       bridge.current?.trace('stt_start_failed', { manualMode, error: msg });
+      listeningActive.current = false;
       setSttStatus(msg);
       setError(msg);
       setPhase('error');
+    } finally {
+      startListeningInFlight.current = false;
     }
   }
 
@@ -347,6 +363,7 @@ function useCodecDemo() {
   function stopTalking() {
     setPttActive(false);
     bridge.current?.trace('stt_stop_manual');
+    listeningActive.current = false;
     stt.current?.stop();
     stt.current?.finalize();
     setSttStatus('PTT released; finalizing transcript');
@@ -367,14 +384,16 @@ function useCodecDemo() {
     setLiveCaption('');
     setPttActive(false);
     bridge.current?.trace('stt_stop_new_call');
+    listeningActive.current = false;
     stt.current?.stop();
     player.current?.stop();
     bridge.current?.newSession();
     assistantText.current = '';
     assistantLineIndex.current = null;
-    setAssistantResponse('Awaiting frequency activation.');
+    setAssistantResponse(autoMicEnabled ? 'Mic auto-starting...' : 'Awaiting frequency activation.');
     setPhase('idle');
     setTranscript([{ speaker: 'System', text: `Fresh ${displaySpeakerName(supportCharacterRef.current, charactersRef.current)} session requested.`, at: now() }]);
+    if (autoMicEnabled) void startListening(false);
   }
   function testCall() {
     const text = `${displaySpeakerName(supportCharacterRef.current, charactersRef.current)}, can you hear me?`;
@@ -387,8 +406,9 @@ function useCodecDemo() {
     activeTurnId.current = null;
     bargeInWords.current = 0;
     const wasListening = phaseRef.current === 'listening';
-    autoResumeListeningAfterSwitch.current = wasListening;
+    autoResumeListeningAfterSwitch.current = wasListening || autoMicEnabled;
     bridge.current?.trace('stt_stop_switch_character', { character, wasListening });
+    listeningActive.current = false;
     stt.current?.stop();
     setPttActive(false);
     setLiveCaption('');

@@ -8,12 +8,13 @@ Default runtime models/components:
 
 - Brain (LLM): whatever `CODEC_PI_MODEL` points to in your local Pi model registry (example in this README uses LM Studio `gemma-4-26b-a4b-it`)
 - STT: Parakeet + Silero VAD
-- TTS: Qwen3-TTS worker (MLX)
+- TTS: Python Qwen3-TTS worker using MLX (`services/qwen3_tts_worker.py`)
 
 Current platform status:
 
-- Mac-first at the moment due to the Qwen3-TTS MLX worker setup but hopefully won't be too hard to port to other platforms
+- Mac-first at the moment due to the Python/MLX Qwen3-TTS worker setup but hopefully won't be too hard to port to other platforms
 - Fully local runtime: STT/TTS/LLM can run entirely on your machine (when backed by local providers/models). ~30GB of shared memory required.
+- The Rust Qwen3-TTS implementation is not the current default runtime worker in this repo.
 
 > [!IMPORTANT]
 > This repo does not ship copyrighted Metal Gear Solid assets. You must provide legally obtained source media (PS1 NTSC/US discs, GOG installer, or an existing PC install directory).
@@ -134,4 +135,4 @@ Foxline builds on and learns from these upstream projects:
 - [Pi coding agent (pi.dev)](https://pi.dev) by Mario Zechner and contributors: local coding-agent runtime used in RPC mode as Foxline's character brain interface.
 - [PiBot / Pipi](https://github.com/badlogic/pibot) by Mario Zechner: worker-based local voice assistant architecture, parakeet.cpp STT worker integration, and Qwen3-TTS worker design.
 - [parakeet.cpp](https://github.com/mudler/parakeet.cpp) by Ettore Di Giacinto and contributors: local C/C++ Parakeet/Nemotron ASR inference and GGUF model support.
-- [qwen3_tts_rs](https://github.com/badlogic/qwen3_tts_rs): Rust Qwen3-TTS inference.
+- [qwen3_tts_rs](https://github.com/badlogic/qwen3_tts_rs): related Rust Qwen3-TTS inference project; not currently wired as Foxline's default TTS worker.
