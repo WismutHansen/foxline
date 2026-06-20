@@ -61,6 +61,15 @@ just benchmark-rust-gateway --audio-file=benchmarks/traces/local-fixtures/uttera
 
 The audio fixture streams the utterance as binary PCM frames, sends trailing silence to let STT close the turn, then waits for assistant deltas, `turn_completed`, binary output PCM, and trace discovery. Raw `.pcm`/`.s16le` input defaults to 24 kHz and can be overridden with `--raw-pcm-sample-rate=<hz>`.
 
+To exercise cancellation after the first output audio frame:
+
+```bash
+just benchmark-rust-gateway --audio-file=benchmarks/traces/local-fixtures/utterance.wav --wait-for-assistant --wait-for-audio --interrupt-on-audio
+just benchmark-legacy-bridge --interrupt-on-audio
+```
+
+The Rust fixture reports the newest trace that contains the milestones requested by the run, so short protocol-only sessions do not mask a completed audio smoke trace. The legacy fixture writes `benchmark_fixture_start`/`benchmark_fixture_done` client trace markers; the comparator uses the latest completed fixture window in a session-long trace.
+
 ## Latency comparator
 
 Compare the newest legacy and Rust traces:
@@ -84,6 +93,13 @@ Measured metrics:
 - `tts_audio_start`
 - `frontend_audio_play_scheduled`
 - `barge_in_cancel` (`tts_cancel_sent - barge_in_received`)
+
+Current proof status:
+
+- A service-backed Rust gateway smoke run has passed through frontend WebSocket, Parakeet/Silero STT, gateway turn commit, Pi RPC Brain, Qwen TTS worker, and binary output PCM.
+- `brain_first_token`, `tts_audio_start`, and `frontend_audio_play_scheduled` measured faster than the available legacy text-injection fixture window in the captured traces.
+- `stt_final` is not yet comparable against the legacy bridge fixture because the legacy runner injects text instead of replaying microphone audio through the legacy STT path.
+- `barge_in_cancel` remains unproven until both paths produce paired `barge_in_received` and `tts_cancel_sent` markers in clean interrupt fixture windows.
 
 To run fixture commands and then compare in one invocation:
 

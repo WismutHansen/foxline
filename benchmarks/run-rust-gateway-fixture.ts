@@ -25,6 +25,7 @@ const tailSilenceMs = Number(argValue('--tail-silence-ms') || 1200);
 const waitForAudio = process.argv.includes('--wait-for-audio') || Boolean(audioFile);
 const waitForAssistant = process.argv.includes('--wait-for-assistant') || Boolean(audioFile);
 const endAfterAudio = process.argv.includes('--end-after-audio') || Boolean(audioFile);
+const interruptOnAudio = process.argv.includes('--interrupt-on-audio');
 
 let audio: AudioFixture | undefined;
 try {
@@ -52,11 +53,11 @@ if (process.argv.includes('--dry-run')) {
     tailSilenceMs,
     waitForAssistant,
     waitForAudio,
+    interruptOnAudio,
   }));
   process.exit(0);
 }
 
-const before = newestTrace(traceDir);
 const startedAt = Date.now();
 const ws = new WebSocket(url);
 let completed = false;
@@ -64,6 +65,7 @@ let sessionStarted = false;
 let assistantDelta = false;
 let outputAudioBytes = 0;
 let turnCompleted = false;
+let interrupted = false;
 
 const timer = setTimeout(() => {
   console.error(`rust gateway fixture timed out after ${timeoutMs}ms; ${statusText()}`);
@@ -90,7 +92,13 @@ ws.addEventListener('message', (event) => {
   if (typeof event.data !== 'string') {
     const bytes = binaryLength(event.data);
     outputAudioBytes += bytes;
-    if (endAfterAudio && canComplete()) endSession();
+    if (interruptOnAudio && !interrupted) {
+      interrupted = true;
+      ws.send(JSON.stringify({ type: 'interrupt' }));
+      setTimeout(() => endSession(), 500);
+    } else if (endAfterAudio && canComplete()) {
+      endSession();
+    }
     return;
   }
   const message = JSON.parse(event.data);
@@ -129,14 +137,14 @@ ws.addEventListener('close', () => {
     console.error('rust gateway fixture connection closed before session end');
     process.exit(1);
   }
-  const after = newestTrace(traceDir);
+  const after = newestMatchingTrace(traceDir, startedAt, expectedTraceEvents());
   console.log(JSON.stringify({
     ok: true,
     url,
     fixture: fixturePath,
     elapsedMs: Date.now() - startedAt,
     traceDir,
-    traceFile: after && after !== before ? after : after || null,
+    traceFile: after || null,
     mode: audio ? 'audio' : 'protocol',
     assistantDelta,
     outputAudioBytes,
@@ -176,7 +184,16 @@ async function streamAudio(ws: WebSocket, audio: AudioFixture, chunkDurationMs: 
 }
 
 function canComplete() {
-  return (!audio || turnCompleted) && (!waitForAssistant || assistantDelta) && (!waitForAudio || outputAudioBytes > 0);
+  return (interruptOnAudio || !audio || turnCompleted) && (!waitForAssistant || assistantDelta) && (!waitForAudio || outputAudioBytes > 0);
+}
+
+function expectedTraceEvents() {
+  const events = ['session_started'];
+  if (audio) events.push('stt_final', 'turn_user_committed');
+  if (waitForAssistant) events.push('brain_first_token');
+  if (waitForAudio) events.push('tts_audio_start', 'frontend_audio_play_scheduled');
+  if (interruptOnAudio) events.push('barge_in_received');
+  return events;
 }
 
 function endSession() {
@@ -244,14 +261,34 @@ function readPcm16MonoWav(data: Buffer, path: string): AudioFixture {
   return { bytes: pcm, sampleRate };
 }
 
-function newestTrace(dir: string) {
+function newestMatchingTrace(dir: string, sinceMs: number, requiredEvents: string[]) {
   try {
     return readdirSync(dir)
       .filter((name) => name.endsWith('.jsonl'))
       .map((name) => resolve(dir, name))
+      .filter((path) => statSync(path).mtimeMs >= sinceMs - 1000)
+      .filter((path) => traceContains(path, requiredEvents))
       .sort((a, b) => statSync(a).mtimeMs - statSync(b).mtimeMs)
       .at(-1);
   } catch {
     return undefined;
   }
+}
+
+function traceContains(path: string, requiredEvents: string[]) {
+  const events = new Set(
+    readFileSync(path, 'utf8')
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          const parsed = JSON.parse(line) as { event?: unknown };
+          return typeof parsed.event === 'string' ? parsed.event : undefined;
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((event): event is string => Boolean(event)),
+  );
+  return requiredEvents.every((event) => events.has(event));
 }

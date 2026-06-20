@@ -188,7 +188,7 @@ async fn handle_connection(
                                 continue;
                             }
                         };
-                        let tts_adapter = match build_tts_adapter(
+                        let mut tts_adapter = match build_tts_adapter(
                             &resolved.loadout.adapters.tts,
                             &agent,
                             &resolved.workspace,
@@ -199,6 +199,10 @@ async fn handle_connection(
                                 continue;
                             }
                         };
+                        if let Err(err) = tts_adapter.prewarm().await {
+                            send_error(&mut ws, "tts_prewarm_failed", &err.to_string()).await?;
+                            continue;
+                        }
                         trace.event(
                             "loadout_resolved",
                             json!({

@@ -36,8 +36,10 @@ const legacyTrace = resolveTrace('--legacy-trace', legacyDir, 'legacy');
 const rustTrace = resolveTrace('--rust-trace', rustDir, 'rust');
 const legacyRecords = readTrace(legacyTrace);
 const rustRecords = readTrace(rustTrace);
-const legacyMetrics = collectMetrics(legacyRecords);
-const rustMetrics = collectMetrics(rustRecords);
+const legacyWindow = latestFixtureWindow(legacyRecords);
+const rustWindow = latestFixtureWindow(rustRecords);
+const legacyMetrics = collectMetrics(legacyWindow);
+const rustMetrics = collectMetrics(rustWindow);
 const comparisons = compareMetrics(legacyMetrics, rustMetrics);
 const ok = comparisons.every((metric) => metric.status === 'pass');
 
@@ -67,7 +69,7 @@ function compareMetrics(legacy: Map<MetricName, number>, rust: Map<MetricName, n
 }
 
 function collectMetrics(records: TraceRecord[]) {
-  const origin = firstTime(records, ['benchmark_fixture_start']) ?? records[0]?.t_ms ?? 0;
+  const origin = firstTime(records, ['benchmark_fixture_start', 'client_benchmark_fixture_start']) ?? records[0]?.t_ms ?? 0;
   const out = new Map<MetricName, number>();
   setElapsed(out, 'stt_final', records, origin);
   setElapsed(out, 'brain_first_token', records, origin);
@@ -77,6 +79,38 @@ function collectMetrics(records: TraceRecord[]) {
   const cancel = firstTime(records, ['tts_cancel_sent']);
   if (bargeIn !== undefined && cancel !== undefined) out.set('barge_in_cancel', cancel - bargeIn);
   return out;
+}
+
+function latestFixtureWindow(records: TraceRecord[]) {
+  const completedStartIndex = latestCompletedFixtureStart(records);
+  const startIndex = completedStartIndex >= 0
+    ? completedStartIndex
+    : records.findLastIndex((record) => isFixtureStart(record.event));
+  if (startIndex < 0) return records;
+  const nextDoneOffset = records
+    .slice(startIndex + 1)
+    .findIndex((record) => isFixtureDone(record.event));
+  const endIndex = nextDoneOffset < 0 ? records.length : startIndex + nextDoneOffset + 2;
+  return records.slice(startIndex, endIndex);
+}
+
+function latestCompletedFixtureStart(records: TraceRecord[]) {
+  for (let index = records.length - 1; index >= 0; index--) {
+    if (!isFixtureDone(records[index].event)) continue;
+    for (let start = index - 1; start >= 0; start--) {
+      if (isFixtureDone(records[start].event)) break;
+      if (isFixtureStart(records[start].event)) return start;
+    }
+  }
+  return -1;
+}
+
+function isFixtureStart(event: string) {
+  return event === 'benchmark_fixture_start' || event === 'client_benchmark_fixture_start';
+}
+
+function isFixtureDone(event: string) {
+  return event === 'benchmark_fixture_done' || event === 'client_benchmark_fixture_done';
 }
 
 function setElapsed(out: Map<MetricName, number>, name: MetricName, records: TraceRecord[], origin: number) {

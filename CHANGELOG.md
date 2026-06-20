@@ -17,3 +17,8 @@
 - Wired the Rust gateway WebSocket loop into loadout-selected STT, Pi RPC Brain, and TTS adapters so live sessions can route binary microphone PCM through turn commits, assistant deltas, TTS requests, binary output PCM, interrupts, and comparable traces.
 - Added a service-backed Rust gateway audio smoke fixture path that streams local ignored PCM16/WAV utterances and waits for assistant text, turn completion, binary output audio, and trace discovery.
 - Added `just` recipes for running, checking, and testing the Rust gateway while preserving the existing TypeScript bridge path as the migration baseline.
+- Updated the Parakeet/Silero STT adapter to convert gateway PCM16 input into the Float32 wire format expected by the current worker.
+- Disabled global Pi extensions by default for gateway-launched Brain RPC processes with `brain.no_extensions = true`, while preserving explicit `.foxline` loadout extension flags.
+- Prewarmed the Qwen TTS worker on Rust gateway session startup to avoid first-response cold-start latency.
+- Added benchmark fixture support for interrupt-on-audio runs, corrected Rust trace discovery to select traces with the requested milestones, and made the latency comparator use completed fixture windows inside session-long traces.
+- Proved a service-backed Rust gateway smoke path through frontend WebSocket, STT, turn commit, Pi RPC Brain, Qwen TTS, and binary frontend audio; full latency parity remains open for real legacy audio/STT and paired barge-in cancellation traces.

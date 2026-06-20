@@ -125,7 +125,9 @@ impl SttAdapter for ParakeetSileroSttAdapter {
     async fn send_pcm(&mut self, session_id: SessionId, pcm: Bytes) -> Result<FrameEnvelope> {
         self.connect(session_id.clone()).await?;
         if let Some(sender) = &self.sender {
-            sender.send(Message::Binary(pcm.to_vec())).await?;
+            sender
+                .send(Message::Binary(pcm16le_to_f32le(&pcm)?.to_vec()))
+                .await?;
         }
         Ok(FrameEnvelope::new(
             session_id,
@@ -274,6 +276,18 @@ pub fn stt_trace_event(frame: &FrameEnvelope) -> Option<(&'static str, serde_jso
     }
 }
 
+fn pcm16le_to_f32le(pcm: &[u8]) -> Result<Bytes> {
+    if pcm.len() % 2 != 0 {
+        bail!("PCM16 input must have an even byte length");
+    }
+    let mut out = Vec::with_capacity(pcm.len() * 2);
+    for chunk in pcm.chunks_exact(2) {
+        let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
+        out.extend_from_slice(&sample.to_le_bytes());
+    }
+    Ok(Bytes::from(out))
+}
+
 pub fn ensure_supported_stt_backend(name: &str) -> Result<()> {
     match name {
         "parakeet-silero" => Ok(()),
@@ -288,7 +302,9 @@ pub fn ensure_supported_stt_backend(name: &str) -> Result<()> {
 mod tests {
     use crate::frame::{Frame, SessionId, SttFrame, VadFrame};
 
-    use super::{ensure_supported_stt_backend, parakeet_message_to_frames, stt_trace_event};
+    use super::{
+        ensure_supported_stt_backend, parakeet_message_to_frames, pcm16le_to_f32le, stt_trace_event,
+    };
 
     #[test]
     fn maps_word_and_interim_to_partial_transcripts() {
@@ -367,5 +383,24 @@ mod tests {
         assert!(ensure_supported_stt_backend("parakeet-silero").is_ok());
         assert!(ensure_supported_stt_backend("nemotron").is_err());
         assert!(ensure_supported_stt_backend("unknown").is_err());
+    }
+
+    #[test]
+    fn converts_gateway_pcm16_to_parakeet_float32_wire_format() {
+        let bytes = pcm16le_to_f32le(&[
+            0x00, 0x00, // 0
+            0xff, 0x7f, // i16::MAX
+            0x00, 0x80, // i16::MIN
+        ])
+        .unwrap();
+
+        let samples = bytes
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(samples[0], 0.0);
+        assert!((samples[1] - 0.9999695).abs() < 0.000001);
+        assert_eq!(samples[2], -1.0);
     }
 }

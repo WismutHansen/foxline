@@ -27,6 +27,7 @@ pub const FRAME_HEADER_BYTES: usize = 9;
 
 #[async_trait]
 pub trait TtsAdapter: Send {
+    async fn prewarm(&mut self) -> Result<()>;
     async fn speak(&mut self, session_id: SessionId, text: String) -> Result<FrameEnvelope>;
     async fn cancel(&mut self, session_id: SessionId) -> Result<FrameEnvelope>;
     async fn shutdown(&mut self) -> Result<()>;
@@ -222,6 +223,10 @@ impl QwenWorkerTtsAdapter {
 
 #[async_trait]
 impl TtsAdapter for QwenWorkerTtsAdapter {
+    async fn prewarm(&mut self) -> Result<()> {
+        self.start().await
+    }
+
     async fn speak(&mut self, session_id: SessionId, text: String) -> Result<FrameEnvelope> {
         let request_id = self.next_request_id;
         self.next_request_id = self.next_request_id.wrapping_add(1).max(1);

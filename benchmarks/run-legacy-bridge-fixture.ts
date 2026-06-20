@@ -13,6 +13,7 @@ const fixturePath = resolve(process.argv.find((arg) => arg.startsWith('--fixture
 const url = process.argv.find((arg) => arg.startsWith('--url='))?.split('=')[1] || process.env.CODEC_BRIDGE_WS_URL || 'ws://127.0.0.1:8770';
 const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as Fixture;
 const timeoutMs = Number(process.argv.find((arg) => arg.startsWith('--timeout-ms='))?.split('=')[1] || fixture.timeoutMs || 60000);
+const interruptOnAudio = process.argv.includes('--interrupt-on-audio');
 
 if (process.argv.includes('--dry-run')) {
   console.log(JSON.stringify({
@@ -23,6 +24,7 @@ if (process.argv.includes('--dry-run')) {
     character: fixture.character,
     utteranceChars: fixture.utterance.length,
     timeoutMs,
+    interruptOnAudio,
   }));
   process.exit(0);
 }
@@ -31,6 +33,7 @@ const startedAt = Date.now();
 const ws = new WebSocket(url);
 let activeTurnId = '';
 let completed = false;
+let tracedPlayback = false;
 
 const timer = setTimeout(() => {
   console.error(`legacy bridge fixture timed out after ${timeoutMs}ms`);
@@ -51,13 +54,34 @@ ws.addEventListener('open', () => {
 ws.addEventListener('message', (event) => {
   const message = JSON.parse(String(event.data));
   if (message.type === 'turn_started') activeTurnId = message.turnId;
+  if ((message.type === 'audio_pcm' || message.type === 'audio_chunk') && !tracedPlayback) {
+    tracedPlayback = true;
+    ws.send(JSON.stringify({
+      type: 'client_trace',
+      event: 'pcm_scheduled',
+      data: { turnId: message.turnId, index: message.index, sampleRate: message.sample_rate },
+    }));
+    if (interruptOnAudio) {
+      ws.send(JSON.stringify({ type: 'interrupt' }));
+      setTimeout(() => {
+        completed = true;
+        ws.send(JSON.stringify({
+          type: 'client_trace',
+          event: 'benchmark_fixture_done',
+          data: { elapsedMs: Date.now() - startedAt, turnId: message.turnId, interrupted: true },
+        }));
+        clearTimeout(timer);
+        ws.close();
+      }, 500);
+    }
+  }
   if (message.type === 'error') {
     console.error(`legacy bridge fixture error: ${message.message}`);
     clearTimeout(timer);
     ws.close();
     process.exit(1);
   }
-  if (message.type === 'turn_completed' && (!activeTurnId || message.turnId === activeTurnId)) {
+  if (!interruptOnAudio && message.type === 'turn_completed' && (!activeTurnId || message.turnId === activeTurnId)) {
     completed = true;
     ws.send(JSON.stringify({
       type: 'client_trace',

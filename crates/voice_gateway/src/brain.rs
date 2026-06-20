@@ -76,6 +76,9 @@ impl PiLaunch {
         if config.no_context_files {
             args.push("--no-context-files".to_string());
         }
+        if config.no_extensions {
+            args.push("--no-extensions".to_string());
+        }
         if let Some(session_dir) = &loadout.loadout.pi.session_dir {
             args.push("--session-dir".to_string());
             args.push(
@@ -529,6 +532,7 @@ mod tests {
         assert_eq!(launch.cwd, dir.path());
         assert!(launch.args.windows(2).any(|pair| pair == ["--mode", "rpc"]));
         assert!(launch.args.contains(&"--continue".to_string()));
+        assert!(launch.args.contains(&"--no-extensions".to_string()));
         assert!(launch
             .args
             .windows(2)
