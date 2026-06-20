@@ -56,6 +56,7 @@ async fn handle_connection(
     let mut capabilities_declared = false;
     let mut frontend_capability_profile = json!({});
     let mut advertised_frontend_tools = Vec::<String>::new();
+    let mut input_sample_rate_hz = 16_000;
     let mut avatar_router = AvatarActionRouter::default();
     let mut tool_router: Option<FrontendToolRouter> = None;
     let mut session_started = false;
@@ -84,6 +85,11 @@ async fn handle_connection(
                     ClientControl::Hello { capabilities, .. } => {
                         capabilities_declared = true;
                         advertised_frontend_tools = capabilities.tools.clone();
+                        if let Some(audio) = &capabilities.audio {
+                            if let Some(sample_rate_hz) = audio.sample_rates_hz.first() {
+                                input_sample_rate_hz = *sample_rate_hz;
+                            }
+                        }
                         avatar_router =
                             AvatarActionRouter::new(capabilities.avatar_actions.clone());
                         frontend_capability_profile = serde_json::to_value(&capabilities)?;
@@ -299,11 +305,14 @@ async fn handle_connection(
                     .await?;
                     continue;
                 }
-                trace.event(EVENT_MIC_FRAME_RECEIVED, json!({ "bytes": bytes.len() }))?;
+                trace.event(
+                    EVENT_MIC_FRAME_RECEIVED,
+                    json!({ "bytes": bytes.len(), "sample_rate_hz": input_sample_rate_hz }),
+                )?;
                 let frame = FrameEnvelope::new(
                     session_id.clone(),
                     Frame::Audio(AudioFrame::InputPcm {
-                        sample_rate_hz: 16_000,
+                        sample_rate_hz: input_sample_rate_hz,
                         channels: 1,
                         bytes: bytes.into(),
                     }),

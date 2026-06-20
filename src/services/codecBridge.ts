@@ -184,3 +184,117 @@ export class CodecBridgeClient {
   switchCharacter(character: string) { this.ws?.send(JSON.stringify({ type: 'switch_character', character })); }
   trace(event: string, data?: Record<string, unknown>) { this.ws?.send(JSON.stringify({ type: 'client_trace', event, data })); }
 }
+
+type GatewayServerEvent =
+  | { type: 'hello'; protocol_version: number; binary_audio: boolean }
+  | { type: 'session_started'; session_id: string }
+  | { type: 'session_ended' }
+  | { type: 'error'; code: string; message: string }
+  | { type: 'trace'; event: string; data: Record<string, unknown> }
+  | { type: 'avatar_action'; action: Record<string, unknown> }
+  | { type: 'frontend_tools_negotiated'; tools: string[] }
+  | { type: 'frontend_tool_call'; name: string; arguments: Record<string, unknown> }
+  | { type: 'frontend_tool_rejected'; name: string; reason: string };
+
+export class RustVoiceGatewayClient {
+  private ws?: WebSocket;
+  private handlers = new Set<(event: BridgeEvent) => void>();
+  private sessionId = '';
+  private reconnectTimer?: number;
+  private reconnectDelayMs = 1000;
+  private readonly agent = import.meta.env.VITE_FOXLINE_GATEWAY_AGENT || 'campbell';
+  private readonly workspace = import.meta.env.VITE_FOXLINE_GATEWAY_WORKSPACE || '.';
+  private readonly loadout = import.meta.env.VITE_FOXLINE_GATEWAY_LOADOUT || 'default';
+
+  constructor(private url = import.meta.env.VITE_FOXLINE_GATEWAY_URL || 'ws://127.0.0.1:8780') {
+    window.addEventListener('online', () => this.connect());
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') this.connect();
+    });
+  }
+
+  connect() {
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
+    window.clearTimeout(this.reconnectTimer);
+    const ws = new WebSocket(this.url);
+    ws.binaryType = 'arraybuffer';
+    this.ws = ws;
+    ws.onopen = () => {
+      this.reconnectDelayMs = 1000;
+      ws.send(JSON.stringify({
+        type: 'hello',
+        client: 'foxline-codec-ui',
+        debug_traces: false,
+        capabilities: {
+          protocol_version: 1,
+          audio: { input_pcm: true, output_pcm: true, sample_rates_hz: [24000] },
+          tools: ['codec.display', 'codec.avatar'],
+          avatar_actions: ['set_state', 'set_expression', 'focus', 'play_animation', 'clear'],
+        },
+      }));
+      ws.send(JSON.stringify({
+        type: 'start_session',
+        agent: this.agent,
+        workspace: this.workspace,
+        loadout: this.loadout,
+      }));
+    };
+    ws.onmessage = async (e) => {
+      if (typeof e.data !== 'string') {
+        const bytes = e.data instanceof ArrayBuffer ? new Uint8Array(e.data) : new Uint8Array(await (e.data as Blob).arrayBuffer());
+        const chunk = uint8ToBase64(bytes);
+        this.emit({ type: 'audio_pcm', turnId: this.sessionId || 'gateway', index: Date.now(), text: '', sample_rate: 24000, chunk });
+        return;
+      }
+      const event = JSON.parse(e.data) as GatewayServerEvent;
+      if (event.type === 'session_started') {
+        this.sessionId = event.session_id;
+        this.emit({ type: 'ready', character: this.agent, characters: [] });
+        this.emit({ type: 'session', sessionId: event.session_id, sessionName: `gateway:${this.agent}` });
+      } else if (event.type === 'session_ended') {
+        this.emit({ type: 'phase', phase: 'idle' });
+      } else if (event.type === 'error') {
+        this.emit({ type: 'error', message: `${event.code}: ${event.message}` });
+      } else if (event.type === 'avatar_action') {
+        this.trace('avatar_action_received', event.action);
+      } else if (event.type === 'frontend_tools_negotiated') {
+        this.trace('frontend_tools_negotiated', { tools: event.tools });
+      } else if (event.type === 'frontend_tool_call') {
+        this.ws?.send(JSON.stringify({
+          type: 'frontend_tool_result',
+          call_id: `${event.name}-${Date.now()}`,
+          result: { ok: false, error: 'Codec UI tool execution is not implemented yet' },
+        }));
+      }
+    };
+    ws.onerror = () => this.emit({ type: 'error', message: `Could not connect to Rust Voice Gateway at ${this.url}` });
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
+      this.emit({ type: 'disconnected' });
+      this.reconnectTimer = window.setTimeout(() => this.connect(), this.reconnectDelayMs);
+      this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, 15000);
+    };
+  }
+
+  private emit(event: BridgeEvent) { for (const h of this.handlers) h(event); }
+  onEvent(handler: (event: BridgeEvent) => void) { this.handlers.add(handler); return () => this.handlers.delete(handler); }
+  sendUtterance(_text: string) { return false; }
+  sendAudioPcm16(pcm: ArrayBuffer) {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    this.ws.send(pcm);
+    return true;
+  }
+  interrupt() { this.ws?.send(JSON.stringify({ type: 'interrupt' })); }
+  newSession() { this.ws?.send(JSON.stringify({ type: 'end_session' })); this.ws?.close(); this.ws = undefined; this.connect(); }
+  switchCharacter(_character: string) {}
+  trace(_event: string, _data?: Record<string, unknown>) {}
+}
+
+function uint8ToBase64(bytes: Uint8Array) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
