@@ -110,6 +110,18 @@ Foxline Codec UI, KITT, oqto, and future clients should all connect through the 
 
 Browser and Tauri clients should use the same WebSocket transport unless a measured latency or packaging issue requires a separate transport later.
 
+## Avatar Actions
+
+Avatar Actions are semantic presentation requests, not Codec/MGS sprite commands. Frontends advertise supported action names in their capability profile. The gateway routes only supported actions as `avatar_action` server events:
+
+- `set_state`
+- `set_expression`
+- `focus`
+- `play_animation`
+- `clear`
+
+The Foxline Codec UI maps these semantic actions to its own visual language; KITT, oqto, and future clients can map the same actions differently.
+
 ## Why worker processes instead of HTTP services
 
 - Lower latency: PCM can stream as soon as the worker emits it.

@@ -8,6 +8,7 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
 use crate::{
+    avatar::AvatarActionRouter,
     brain::{BrainIdentity, BrainPool},
     config::GatewayConfig,
     frame::{
@@ -53,6 +54,7 @@ async fn handle_connection(
     let trace = TraceWriter::create(config.trace_dir.clone(), &session_id_text)?;
     let mut capabilities_declared = false;
     let mut frontend_capability_profile = json!({});
+    let mut avatar_router = AvatarActionRouter::default();
     let mut session_started = false;
     let mut pipeline = default_pipeline(config.turn.clone());
 
@@ -78,6 +80,8 @@ async fn handle_connection(
                 match event {
                     ClientControl::Hello { capabilities, .. } => {
                         capabilities_declared = true;
+                        avatar_router =
+                            AvatarActionRouter::new(capabilities.avatar_actions.clone());
                         frontend_capability_profile = serde_json::to_value(&capabilities)?;
                         let frame = FrameEnvelope::new(
                             session_id.clone(),
@@ -157,7 +161,14 @@ async fn handle_connection(
                             session_id.clone(),
                             Frame::Lifecycle(LifecycleFrame::SessionStarted),
                         );
-                        process_pipeline_outputs(&mut pipeline, &trace, frame).await?;
+                        process_pipeline_outputs(
+                            &mut ws,
+                            &mut pipeline,
+                            &trace,
+                            &avatar_router,
+                            frame,
+                        )
+                        .await?;
                         send_event(
                             &mut ws,
                             &ServerEvent::SessionStarted {
@@ -171,7 +182,14 @@ async fn handle_connection(
                             session_id.clone(),
                             Frame::Lifecycle(LifecycleFrame::SessionEnded),
                         );
-                        process_pipeline_outputs(&mut pipeline, &trace, frame).await?;
+                        process_pipeline_outputs(
+                            &mut ws,
+                            &mut pipeline,
+                            &trace,
+                            &avatar_router,
+                            frame,
+                        )
+                        .await?;
                         send_event(&mut ws, &ServerEvent::SessionEnded).await?;
                         break;
                     }
@@ -186,7 +204,14 @@ async fn handle_connection(
                                 confidence,
                             }),
                         );
-                        process_pipeline_outputs(&mut pipeline, &trace, frame).await?;
+                        process_pipeline_outputs(
+                            &mut ws,
+                            &mut pipeline,
+                            &trace,
+                            &avatar_router,
+                            frame,
+                        )
+                        .await?;
                     }
                     ClientControl::Interrupt => {
                         trace.event(EVENT_BARGE_IN_RECEIVED, json!({}))?;
@@ -196,7 +221,14 @@ async fn handle_connection(
                                 reason: InterruptReason::FrontendBargeIn,
                             }),
                         );
-                        process_pipeline_outputs(&mut pipeline, &trace, frame).await?;
+                        process_pipeline_outputs(
+                            &mut ws,
+                            &mut pipeline,
+                            &trace,
+                            &avatar_router,
+                            frame,
+                        )
+                        .await?;
                     }
                     ClientControl::FrontendToolResult { .. } => {
                         warn!("frontend tool result received before tool router is implemented");
@@ -231,7 +263,8 @@ async fn handle_connection(
                         bytes: bytes.into(),
                     }),
                 );
-                process_pipeline_outputs(&mut pipeline, &trace, frame).await?;
+                process_pipeline_outputs(&mut ws, &mut pipeline, &trace, &avatar_router, frame)
+                    .await?;
             }
             Message::Close(_) => break,
             Message::Ping(payload) => ws.send(Message::Pong(payload)).await?,
@@ -245,8 +278,10 @@ async fn handle_connection(
 }
 
 async fn process_pipeline_outputs(
+    ws: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
     pipeline: &mut LinearPipeline,
     trace: &TraceWriter,
+    avatar_router: &AvatarActionRouter,
     frame: FrameEnvelope,
 ) -> Result<Vec<FrameEnvelope>> {
     let out = pipeline.process(frame).await?;
@@ -266,6 +301,13 @@ async fn process_pipeline_outputs(
             }
             Frame::Tts(crate::frame::TtsFrame::Cancel) => {
                 trace.event(EVENT_TTS_CANCEL_SENT, json!({}))?;
+            }
+            Frame::AvatarAction(action) => {
+                if let Some(action) = avatar_router.route(action) {
+                    send_event(ws, &ServerEvent::AvatarAction { action }).await?;
+                } else {
+                    trace.event("avatar_action_rejected", json!({ "reason": "unsupported" }))?;
+                }
             }
             _ => {}
         }

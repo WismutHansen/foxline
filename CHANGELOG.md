@@ -8,4 +8,5 @@
 - Added legacy bridge benchmark trace mirroring, comparable event aliases, and a repeatable WebSocket fixture runner for the TypeScript bridge baseline.
 - Documented the Rust gateway migration phases, monorepo boundaries, `.foxline`/`.pi` split, bundled versus project-local loadouts, and future frontend client model.
 - Added the Rust Pi RPC Brain adapter boundary with identity-bound warm process lifecycle, explicit `pi --mode rpc` launch construction, `--extension` routing, JSONL event mapping, and WebSocket startup prewarm binding.
+- Added semantic Avatar Action routing with frontend capability checks and theme-agnostic `avatar_action` server events.
 - Added `just` recipes for running, checking, and testing the Rust gateway while preserving the existing TypeScript bridge path as the migration baseline.
