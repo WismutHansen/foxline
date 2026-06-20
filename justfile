@@ -29,6 +29,15 @@ build:
 typecheck:
     bun run typecheck
 
+gateway *args:
+    cargo run -p foxline-voice-gateway -- {{args}}
+
+gateway-check:
+    cargo check -p foxline-voice-gateway
+
+gateway-test:
+    cargo test -p foxline-voice-gateway
+
 preview:
     bun run preview
 

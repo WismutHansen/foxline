@@ -1,0 +1,170 @@
+use std::{fs, path::PathBuf};
+
+use anyhow::{Context, Result};
+use clap::Parser;
+use schemars::{schema_for, JsonSchema};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Parser)]
+#[command(name = "foxline-voice-gateway")]
+#[command(about = "Rust Voice Gateway runtime for Foxline voice sessions")]
+pub struct Cli {
+    #[arg(long, env = "FOXLINE_GATEWAY_CONFIG")]
+    pub config: Option<PathBuf>,
+
+    #[arg(long, env = "FOXLINE_GATEWAY_BIND")]
+    pub bind: Option<String>,
+
+    #[arg(long, env = "FOXLINE_GATEWAY_TRACE_DIR")]
+    pub trace_dir: Option<PathBuf>,
+
+    #[arg(long, env = "FOXLINE_GATEWAY_DEBUG_TRACES")]
+    pub debug_traces: Option<bool>,
+
+    #[arg(long)]
+    pub print_config_schema: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct GatewayConfig {
+    pub bind: String,
+    pub trace_dir: PathBuf,
+    pub debug_traces: bool,
+    pub session_idle_timeout_ms: u64,
+    pub brain: BrainConfig,
+    pub frontend: FrontendConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct BrainConfig {
+    pub pi_command: String,
+    pub idle_timeout_ms: u64,
+    pub prewarm: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct FrontendConfig {
+    pub require_capability_declaration: bool,
+    pub max_audio_frame_bytes: usize,
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            bind: "127.0.0.1:8780".to_string(),
+            trace_dir: default_state_dir().join("traces").join("rust-gateway"),
+            debug_traces: false,
+            session_idle_timeout_ms: 300_000,
+            brain: BrainConfig::default(),
+            frontend: FrontendConfig::default(),
+        }
+    }
+}
+
+impl Default for BrainConfig {
+    fn default() -> Self {
+        Self {
+            pi_command: "pi".to_string(),
+            idle_timeout_ms: 300_000,
+            prewarm: false,
+        }
+    }
+}
+
+impl Default for FrontendConfig {
+    fn default() -> Self {
+        Self {
+            require_capability_declaration: true,
+            max_audio_frame_bytes: 32 * 1024,
+        }
+    }
+}
+
+impl GatewayConfig {
+    pub fn load(cli: &Cli) -> Result<Self> {
+        let default_path = default_config_path();
+        ensure_default_config(&default_path)?;
+
+        let mut builder = config::Config::builder();
+        let path = cli.config.clone().unwrap_or(default_path);
+        if path.exists() {
+            builder = builder.add_source(config::File::from(path).required(false));
+        }
+
+        let mut loaded: GatewayConfig = builder
+            .build()
+            .context("build gateway config")?
+            .try_deserialize()
+            .context("deserialize gateway config")?;
+
+        if let Some(bind) = &cli.bind {
+            loaded.bind = bind.clone();
+        }
+        if let Some(trace_dir) = &cli.trace_dir {
+            loaded.trace_dir = trace_dir.clone();
+        }
+        if let Some(debug_traces) = cli.debug_traces {
+            loaded.debug_traces = debug_traces;
+        }
+
+        Ok(loaded)
+    }
+
+    pub fn schema_json() -> Result<String> {
+        serde_json::to_string_pretty(&schema_for!(GatewayConfig)).context("serialize config schema")
+    }
+}
+
+pub fn default_config_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".config")
+        })
+        .join("foxline")
+        .join("config.toml")
+}
+
+fn default_state_dir() -> PathBuf {
+    dirs::state_dir()
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".local/state")
+        })
+        .join("foxline")
+}
+
+fn ensure_default_config(path: &PathBuf) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create config dir {}", parent.display()))?;
+    }
+    fs::write(path, default_config_toml())
+        .with_context(|| format!("write default config {}", path.display()))?;
+    Ok(())
+}
+
+fn default_config_toml() -> &'static str {
+    r#"# Foxline Voice Gateway defaults.
+bind = "127.0.0.1:8780"
+debug_traces = false
+session_idle_timeout_ms = 300000
+
+[brain]
+pi_command = "pi"
+idle_timeout_ms = 300000
+prewarm = false
+
+[frontend]
+require_capability_declaration = true
+max_audio_frame_bytes = 32768
+"#
+}

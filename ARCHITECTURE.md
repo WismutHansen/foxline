@@ -10,11 +10,46 @@ browser UI
       -> parakeet.cpp + Silero STT worker process/service
 ```
 
+During the Rust Voice Gateway migration, `server/bridge.ts` remains the latency and behavior baseline. The Rust gateway lives in `crates/voice_gateway` and is introduced behind a separate WebSocket endpoint until benchmark parity is proven.
+
+```text
+frontend client
+  -> foxline-voice-gateway WebSocket
+      -> canonical frame pipeline
+      -> Pi RPC Brain adapter
+      -> STT adapter
+      -> TTS adapter
+      -> frontend tool/avatar action routers
+```
+
+The gateway never calls LLM servers directly. Pi is always the Brain path and owns model/provider access, tools, skills, extensions, prompt templates, and session behavior.
+
 ## Runtime defaults
 
 - Brain: pi-rpc only.
 - TTS: Qwen3-TTS only.
 - STT: parakeet.cpp by default, currently with Silero VAD for turn detection.
+
+## Rust Voice Gateway protocol
+
+The gateway frontend transport is WebSocket:
+
+- JSON text messages carry control and event frames such as `hello`, `start_session`, `end_session`, `vad_hint`, `interrupt`, and errors.
+- Binary messages carry PCM audio frames on the normal path. Audio must not be base64 encoded in JSON.
+- Frontends declare capabilities before session startup. The current shell records this profile and follow-up work will negotiate tool and avatar action surfaces against `.foxline` loadouts.
+- Debug trace streaming is gated by configuration; server-side JSONL traces remain the default.
+
+Trace events use names comparable to the legacy bridge path, including `mic_frame_received`, `stt_partial`, `stt_final`, `brain_request_start`, `brain_first_token`, `tts_request_start`, `tts_audio_start`, `frontend_audio_play_scheduled`, `barge_in_received`, and `tts_cancel_sent`.
+
+## Configuration
+
+The Rust gateway reads XDG-compliant config from `$XDG_CONFIG_HOME/foxline/config.toml` or `~/.config/foxline/config.toml`, creating defaults on first run. Command-line flags override the config file and environment variables can be used for deployment overrides.
+
+Generate the JSON schema with:
+
+```bash
+just gateway --print-config-schema
+```
 
 ## Why worker processes instead of HTTP services
 
@@ -55,6 +90,7 @@ Important models:
 ## Repo layout
 
 - `server/` - app runtime server.
+- `crates/voice_gateway/` - Rust Voice Gateway runtime core and WebSocket protocol.
 - `services/` - worker/service adapters that are runtime-adjacent.
 - `tools/` - install-time/extraction utilities only.
 - `scripts/` - user-facing shell entrypoints.

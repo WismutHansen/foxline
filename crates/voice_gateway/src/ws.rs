@@ -1,0 +1,200 @@
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use futures_util::{SinkExt, StreamExt};
+use serde_json::json;
+use tokio::net::{TcpListener, TcpStream};
+use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tracing::{error, info, warn};
+
+use crate::{
+    config::GatewayConfig,
+    frame::{
+        AudioFrame, Frame, FrameEnvelope, InterruptReason, LifecycleFrame, SessionId, TurnFrame,
+        VadFrame,
+    },
+    pipeline::default_pipeline,
+    protocol::{ClientControl, ServerEvent},
+    trace::{
+        TraceWriter, EVENT_BARGE_IN_RECEIVED, EVENT_MIC_FRAME_RECEIVED, EVENT_TTS_CANCEL_SENT,
+    },
+};
+
+pub async fn serve(config: GatewayConfig) -> Result<()> {
+    let listener = TcpListener::bind(&config.bind)
+        .await
+        .with_context(|| format!("bind gateway websocket {}", config.bind))?;
+    info!(bind = %config.bind, "voice gateway listening");
+    let shared = Arc::new(config);
+
+    loop {
+        let (stream, addr) = listener.accept().await.context("accept websocket tcp")?;
+        let config = Arc::clone(&shared);
+        tokio::spawn(async move {
+            if let Err(err) = handle_connection(stream, config).await {
+                error!(%addr, error = %err, "gateway connection failed");
+            }
+        });
+    }
+}
+
+async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Result<()> {
+    let mut ws = accept_async(stream).await.context("accept websocket")?;
+    let session_id = SessionId::new();
+    let session_id_text = session_id.0.to_string();
+    let trace = TraceWriter::create(config.trace_dir.clone(), &session_id_text)?;
+    let mut capabilities_declared = false;
+    let mut session_started = false;
+    let mut pipeline = default_pipeline();
+
+    send_event(
+        &mut ws,
+        &ServerEvent::Hello {
+            protocol_version: 1,
+            binary_audio: true,
+        },
+    )
+    .await?;
+
+    while let Some(message) = ws.next().await {
+        match message.context("read websocket message")? {
+            Message::Text(text) => {
+                let event = match serde_json::from_str::<ClientControl>(&text) {
+                    Ok(event) => event,
+                    Err(err) => {
+                        send_error(&mut ws, "invalid_json", &err.to_string()).await?;
+                        continue;
+                    }
+                };
+                match event {
+                    ClientControl::Hello { capabilities, .. } => {
+                        capabilities_declared = true;
+                        let frame = FrameEnvelope::new(
+                            session_id.clone(),
+                            Frame::Lifecycle(LifecycleFrame::CapabilityDeclared {
+                                profile: serde_json::to_value(capabilities)?,
+                            }),
+                        );
+                        let _ = pipeline.process(frame).await?;
+                    }
+                    ClientControl::StartSession { .. } => {
+                        if config.frontend.require_capability_declaration && !capabilities_declared
+                        {
+                            send_error(
+                                &mut ws,
+                                "capabilities_required",
+                                "send hello before start_session",
+                            )
+                            .await?;
+                            continue;
+                        }
+                        session_started = true;
+                        send_event(
+                            &mut ws,
+                            &ServerEvent::SessionStarted {
+                                session_id: session_id_text.clone(),
+                            },
+                        )
+                        .await?;
+                    }
+                    ClientControl::EndSession => {
+                        send_event(&mut ws, &ServerEvent::SessionEnded).await?;
+                        break;
+                    }
+                    ClientControl::VadHint {
+                        speaking,
+                        confidence,
+                    } => {
+                        let frame = FrameEnvelope::new(
+                            session_id.clone(),
+                            Frame::Vad(VadFrame::FrontendHint {
+                                speaking,
+                                confidence,
+                            }),
+                        );
+                        let _ = pipeline.process(frame).await?;
+                    }
+                    ClientControl::Interrupt => {
+                        trace.event(EVENT_BARGE_IN_RECEIVED, json!({}))?;
+                        let frame = FrameEnvelope::new(
+                            session_id.clone(),
+                            Frame::Turn(TurnFrame::Interrupted {
+                                reason: InterruptReason::FrontendBargeIn,
+                            }),
+                        );
+                        for out in pipeline.process(frame).await? {
+                            if matches!(out.frame, Frame::Tts(crate::frame::TtsFrame::Cancel)) {
+                                trace.event(EVENT_TTS_CANCEL_SENT, json!({}))?;
+                            }
+                        }
+                    }
+                    ClientControl::FrontendToolResult { .. } => {
+                        warn!("frontend tool result received before tool router is implemented");
+                    }
+                }
+            }
+            Message::Binary(bytes) => {
+                if !session_started {
+                    send_error(
+                        &mut ws,
+                        "session_required",
+                        "start_session before binary audio",
+                    )
+                    .await?;
+                    continue;
+                }
+                if bytes.len() > config.frontend.max_audio_frame_bytes {
+                    send_error(
+                        &mut ws,
+                        "audio_frame_too_large",
+                        "binary audio frame exceeds configured limit",
+                    )
+                    .await?;
+                    continue;
+                }
+                trace.event(EVENT_MIC_FRAME_RECEIVED, json!({ "bytes": bytes.len() }))?;
+                let frame = FrameEnvelope::new(
+                    session_id.clone(),
+                    Frame::Audio(AudioFrame::InputPcm {
+                        sample_rate_hz: 16_000,
+                        channels: 1,
+                        bytes: bytes.into(),
+                    }),
+                );
+                let _ = pipeline.process(frame).await?;
+            }
+            Message::Close(_) => break,
+            Message::Ping(payload) => ws.send(Message::Pong(payload)).await?,
+            Message::Pong(_) => {}
+            Message::Frame(_) => {}
+        }
+    }
+
+    info!(session_id = %session_id_text, "gateway session ended");
+    Ok(())
+}
+
+async fn send_error<S>(ws: &mut S, code: &str, message: &str) -> Result<()>
+where
+    S: SinkExt<Message> + Unpin,
+    S::Error: std::error::Error + Send + Sync + 'static,
+{
+    send_event(
+        ws,
+        &ServerEvent::Error {
+            code: code.to_string(),
+            message: message.to_string(),
+        },
+    )
+    .await
+}
+
+async fn send_event<S>(ws: &mut S, event: &ServerEvent) -> Result<()>
+where
+    S: SinkExt<Message> + Unpin,
+    S::Error: std::error::Error + Send + Sync + 'static,
+{
+    ws.send(Message::Text(serde_json::to_string(event)?))
+        .await?;
+    Ok(())
+}
