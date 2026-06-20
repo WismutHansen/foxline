@@ -41,6 +41,12 @@ gateway-test:
 benchmark-legacy-bridge *args:
     bun run benchmarks/run-legacy-bridge-fixture.ts {{args}}
 
+benchmark-rust-gateway *args:
+    bun run benchmarks/run-rust-gateway-fixture.ts {{args}}
+
+benchmark-gateway-latency *args:
+    bun run benchmarks/run-gateway-latency-benchmark.ts {{args}}
+
 preview:
     bun run preview
 

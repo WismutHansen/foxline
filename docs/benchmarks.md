@@ -40,4 +40,41 @@ just benchmark-legacy-bridge
 
 The runner sends `benchmarks/fixtures/legacy-bridge-utterance.json` to the bridge over WebSocket and waits for `turn_completed`. It expects the bridge, Pi RPC, and TTS/STT services needed by the demo to already be available.
 
-The Rust gateway benchmark harness must compare against these JSONL events and clearly flag any end-to-end latency delta greater than +50ms.
+Start the Rust gateway with benchmark-local traces, then run:
+
+```bash
+FOXLINE_GATEWAY_TRACE_DIR=benchmarks/traces/rust-gateway just gateway
+just benchmark-rust-gateway
+```
+
+The Rust fixture declares the same frontend capability profile as the Codec UI, starts a session, sends a deterministic silent PCM frame, triggers an interrupt, and closes the session. Until the full Rust STT/Brain/TTS path is wired end to end, the latency comparator will report missing downstream milestones instead of treating them as a pass.
+
+## Latency comparator
+
+Compare the newest legacy and Rust traces:
+
+```bash
+just benchmark-gateway-latency
+```
+
+Or pass explicit trace files:
+
+```bash
+just benchmark-gateway-latency --legacy-trace=benchmarks/traces/legacy-bridge/campbell.jsonl --rust-trace=benchmarks/traces/rust-gateway/session.jsonl
+```
+
+The comparator writes a machine-readable summary to `benchmarks/traces/latency-summary-<timestamp>.json` and exits non-zero when a metric is missing or the Rust trace is more than 50ms slower than the legacy trace. Override the budget with `--threshold-ms=<ms>`.
+
+Measured metrics:
+
+- `stt_final`
+- `brain_first_token`
+- `tts_audio_start`
+- `frontend_audio_play_scheduled`
+- `barge_in_cancel` (`tts_cancel_sent - barge_in_received`)
+
+To run fixture commands and then compare in one invocation:
+
+```bash
+just benchmark-gateway-latency --legacy-command="just benchmark-legacy-bridge" --rust-command="just benchmark-rust-gateway"
+```

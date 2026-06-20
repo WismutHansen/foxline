@@ -13,4 +13,5 @@
 - Added the STT adapter interface and Parakeet/Silero WebSocket backend protocol mapping for PCM input, VAD evidence, partial/final transcripts, errors, reset, and comparable trace events.
 - Added frontend tool capability negotiation with required/optional loadout tools, advertised frontend tool intersection, startup failure for missing required tools, negotiated tool events, result frames, and unauthorized call rejection.
 - Added opt-in Codec UI wiring for the Rust Voice Gateway WebSocket protocol, including frontend capability declaration, binary microphone PCM streaming, binary PCM playback handling, session lifecycle mapping, and legacy bridge fallback.
+- Added a Rust gateway latency benchmark harness with fixture runners, canonical JSONL trace comparison, +50ms budget reporting, and machine-readable summaries under `benchmarks/traces/`.
 - Added `just` recipes for running, checking, and testing the Rust gateway while preserving the existing TypeScript bridge path as the migration baseline.
