@@ -325,6 +325,10 @@ impl PiRpcBrain {
         self.events.as_mut()?.recv().await
     }
 
+    pub fn try_next_frame(&mut self) -> Option<FrameEnvelope> {
+        self.events.as_mut()?.try_recv().ok()
+    }
+
     async fn send(&mut self, mut value: Value) -> Result<()> {
         self.seq += 1;
         value["id"] = Value::String(format!("req-{}", self.seq));

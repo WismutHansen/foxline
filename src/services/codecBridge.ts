@@ -189,6 +189,11 @@ type GatewayServerEvent =
   | { type: 'hello'; protocol_version: number; binary_audio: boolean }
   | { type: 'session_started'; session_id: string }
   | { type: 'session_ended' }
+  | { type: 'phase'; phase: CodecPhase }
+  | { type: 'turn_started'; turn_id: string; character?: string }
+  | { type: 'assistant_delta'; turn_id: string; delta: string }
+  | { type: 'turn_completed'; turn_id: string }
+  | { type: 'audio_reset'; reason?: string }
   | { type: 'error'; code: string; message: string }
   | { type: 'trace'; event: string; data: Record<string, unknown> }
   | { type: 'avatar_action'; action: Record<string, unknown> }
@@ -253,6 +258,16 @@ export class RustVoiceGatewayClient {
         this.emit({ type: 'session', sessionId: event.session_id, sessionName: `gateway:${this.agent}` });
       } else if (event.type === 'session_ended') {
         this.emit({ type: 'phase', phase: 'idle' });
+      } else if (event.type === 'phase') {
+        this.emit({ type: 'phase', phase: event.phase });
+      } else if (event.type === 'turn_started') {
+        this.emit({ type: 'turn_started', turnId: event.turn_id, character: event.character });
+      } else if (event.type === 'assistant_delta') {
+        this.emit({ type: 'assistant_delta', turnId: event.turn_id, delta: event.delta });
+      } else if (event.type === 'turn_completed') {
+        this.emit({ type: 'turn_completed', turnId: event.turn_id });
+      } else if (event.type === 'audio_reset') {
+        this.emit({ type: 'audio_reset', reason: event.reason });
       } else if (event.type === 'error') {
         this.emit({ type: 'error', message: `${event.code}: ${event.message}` });
       } else if (event.type === 'avatar_action') {

@@ -52,6 +52,23 @@ pub enum ServerEvent {
         session_id: String,
     },
     SessionEnded,
+    Phase {
+        phase: String,
+    },
+    TurnStarted {
+        turn_id: String,
+        character: Option<String>,
+    },
+    AssistantDelta {
+        turn_id: String,
+        delta: String,
+    },
+    TurnCompleted {
+        turn_id: String,
+    },
+    AudioReset {
+        reason: Option<String>,
+    },
     Error {
         code: String,
         message: String,

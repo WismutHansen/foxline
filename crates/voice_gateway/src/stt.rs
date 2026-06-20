@@ -17,6 +17,7 @@ pub trait SttAdapter: Send {
     async fn send_pcm(&mut self, session_id: SessionId, pcm: Bytes) -> Result<FrameEnvelope>;
     async fn reset(&mut self) -> Result<()>;
     async fn shutdown(&mut self) -> Result<()>;
+    fn try_next_frame(&mut self) -> Option<FrameEnvelope>;
     async fn next_frame(&mut self) -> Option<FrameEnvelope>;
 }
 
@@ -148,6 +149,16 @@ impl SttAdapter for ParakeetSileroSttAdapter {
         self.sender = None;
         self.events = None;
         Ok(())
+    }
+
+    fn try_next_frame(&mut self) -> Option<FrameEnvelope> {
+        let frame = self.events.as_mut()?.try_recv().ok()?;
+        if let Some(trace) = &self.trace {
+            if let Some((event, data)) = stt_trace_event(&frame) {
+                let _ = trace.event(event, data);
+            }
+        }
+        Some(frame)
     }
 
     async fn next_frame(&mut self) -> Option<FrameEnvelope> {

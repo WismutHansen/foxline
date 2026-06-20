@@ -30,6 +30,7 @@ pub trait TtsAdapter: Send {
     async fn speak(&mut self, session_id: SessionId, text: String) -> Result<FrameEnvelope>;
     async fn cancel(&mut self, session_id: SessionId) -> Result<FrameEnvelope>;
     async fn shutdown(&mut self) -> Result<()>;
+    fn try_next_frame(&mut self) -> Option<FrameEnvelope>;
     async fn next_frame(&mut self) -> Option<FrameEnvelope>;
 }
 
@@ -268,6 +269,10 @@ impl TtsAdapter for QwenWorkerTtsAdapter {
             let _ = child.kill().await;
         }
         Ok(())
+    }
+
+    fn try_next_frame(&mut self) -> Option<FrameEnvelope> {
+        self.events.as_mut()?.try_recv().ok()
     }
 
     async fn next_frame(&mut self) -> Option<FrameEnvelope> {

@@ -1,27 +1,32 @@
-use std::sync::Arc;
+use std::{env, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
+use tokio::time::{self, Duration};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
 use crate::{
     avatar::AvatarActionRouter,
-    brain::{BrainIdentity, BrainPool},
+    brain::{BrainIdentity, BrainPool, PiRpcBrain},
     config::GatewayConfig,
     frame::{
-        AudioFrame, Frame, FrameEnvelope, FrontendToolFrame, InterruptReason, LifecycleFrame,
-        SessionId, TurnFrame, VadFrame,
+        AudioFrame, BrainFrame, Frame, FrameEnvelope, FrontendToolFrame, InterruptReason,
+        LifecycleFrame, SessionId, SttFrame, TtsFrame, TurnFrame, VadFrame,
     },
     loadout::LoadoutResolver,
     pipeline::{default_pipeline, LinearPipeline},
     protocol::{ClientControl, ServerEvent},
+    stt::{stt_trace_event, ParakeetSileroConfig, ParakeetSileroSttAdapter, SttAdapter},
     tools::{FrontendToolNegotiation, FrontendToolRouter},
     trace::{
-        TraceWriter, EVENT_BARGE_IN_RECEIVED, EVENT_MIC_FRAME_RECEIVED, EVENT_TTS_CANCEL_SENT,
+        TraceWriter, EVENT_BARGE_IN_RECEIVED, EVENT_BRAIN_FIRST_TOKEN, EVENT_BRAIN_REQUEST_START,
+        EVENT_FRONTEND_AUDIO_PLAY_SCHEDULED, EVENT_MIC_FRAME_RECEIVED, EVENT_TTS_CANCEL_SENT,
     },
+    tts::{qwen_worker_trace_event, QwenWorkerConfig, QwenWorkerTtsAdapter, TtsAdapter},
 };
 
 pub async fn serve(config: GatewayConfig) -> Result<()> {
@@ -59,8 +64,13 @@ async fn handle_connection(
     let mut input_sample_rate_hz = 16_000;
     let mut avatar_router = AvatarActionRouter::default();
     let mut tool_router: Option<FrontendToolRouter> = None;
+    let mut brain: Option<Arc<Mutex<PiRpcBrain>>> = None;
+    let mut stt: Option<Box<dyn SttAdapter>> = None;
+    let mut tts: Option<Box<dyn TtsAdapter>> = None;
+    let mut live = LiveSessionState::new(session_id_text.clone());
     let mut session_started = false;
     let mut pipeline = default_pipeline(config.turn.clone());
+    let mut adapter_tick = time::interval(Duration::from_millis(15));
 
     send_event(
         &mut ws,
@@ -71,8 +81,24 @@ async fn handle_connection(
     )
     .await?;
 
-    while let Some(message) = ws.next().await {
-        match message.context("read websocket message")? {
+    loop {
+        tokio::select! {
+            _ = adapter_tick.tick(), if session_started => {
+                drain_adapter_frames(
+                    &mut ws,
+                    &mut pipeline,
+                    &trace,
+                    &avatar_router,
+                    &mut live,
+                    brain.as_ref(),
+                    &mut stt,
+                    &mut tts,
+                ).await?;
+                continue;
+            }
+            message = ws.next() => {
+                let Some(message) = message else { break; };
+                match message.context("read websocket message")? {
             Message::Text(text) => {
                 let event = match serde_json::from_str::<ClientControl>(&text) {
                     Ok(event) => event,
@@ -145,7 +171,7 @@ async fn handle_connection(
                             .cloned()
                             .collect::<Vec<_>>();
                         tool_router = Some(FrontendToolRouter::new(tool_negotiation.clone()));
-                        let brain =
+                        let brain_handle =
                             match brain_pool.get_or_prewarm(identity.clone(), &resolved).await {
                                 Ok(brain) => brain,
                                 Err(err) => {
@@ -154,7 +180,25 @@ async fn handle_connection(
                                     continue;
                                 }
                             };
-                        let launch = brain.lock().await.launch().clone();
+                        let launch = brain_handle.lock().await.launch().clone();
+                        let stt_adapter = match build_stt_adapter(&resolved.loadout.adapters.stt) {
+                            Ok(adapter) => adapter,
+                            Err(err) => {
+                                send_error(&mut ws, "stt_adapter_failed", &err.to_string()).await?;
+                                continue;
+                            }
+                        };
+                        let tts_adapter = match build_tts_adapter(
+                            &resolved.loadout.adapters.tts,
+                            &agent,
+                            &resolved.workspace,
+                        ) {
+                            Ok(adapter) => adapter,
+                            Err(err) => {
+                                send_error(&mut ws, "tts_adapter_failed", &err.to_string()).await?;
+                                continue;
+                            }
+                        };
                         trace.event(
                             "loadout_resolved",
                             json!({
@@ -182,6 +226,10 @@ async fn handle_connection(
                             }),
                         )?;
                         session_started = true;
+                        brain = Some(brain_handle);
+                        stt = Some(stt_adapter);
+                        tts = Some(tts_adapter);
+                        live = LiveSessionState::new(session_id_text.clone());
                         process_pipeline_outputs(
                             &mut ws,
                             &mut pipeline,
@@ -211,6 +259,12 @@ async fn handle_connection(
                         .await?;
                     }
                     ClientControl::EndSession => {
+                        if let Some(stt) = stt.as_deref_mut() {
+                            let _ = stt.shutdown().await;
+                        }
+                        if let Some(tts) = tts.as_deref_mut() {
+                            let _ = tts.shutdown().await;
+                        }
                         let frame = FrameEnvelope::new(
                             session_id.clone(),
                             Frame::Lifecycle(LifecycleFrame::SessionEnded),
@@ -248,6 +302,22 @@ async fn handle_connection(
                     }
                     ClientControl::Interrupt => {
                         trace.event(EVENT_BARGE_IN_RECEIVED, json!({}))?;
+                        if let Some(brain) = &brain {
+                            brain.lock().await.abort().await?;
+                        }
+                        if let Some(tts_adapter) = tts.as_deref_mut() {
+                            let cancel = tts_adapter.cancel(session_id.clone()).await?;
+                            handle_runtime_frame(
+                                &mut ws,
+                                &mut pipeline,
+                                &trace,
+                                &avatar_router,
+                                &mut live,
+                                brain.as_ref(),
+                                &mut tts,
+                                cancel,
+                            ).await?;
+                        }
                         let frame = FrameEnvelope::new(
                             session_id.clone(),
                             Frame::Turn(TurnFrame::Interrupted {
@@ -317,17 +387,303 @@ async fn handle_connection(
                         bytes: bytes.into(),
                     }),
                 );
-                process_pipeline_outputs(&mut ws, &mut pipeline, &trace, &avatar_router, frame)
-                    .await?;
+                if let Frame::Audio(AudioFrame::InputPcm { bytes, .. }) = &frame.frame {
+                    if let Some(stt) = stt.as_deref_mut() {
+                        let stt_hint = stt.send_pcm(session_id.clone(), bytes.clone()).await?;
+                        handle_runtime_frame(
+                            &mut ws,
+                            &mut pipeline,
+                            &trace,
+                            &avatar_router,
+                            &mut live,
+                            brain.as_ref(),
+                            &mut tts,
+                            stt_hint,
+                        ).await?;
+                    }
+                }
+                handle_runtime_frame(
+                    &mut ws,
+                    &mut pipeline,
+                    &trace,
+                    &avatar_router,
+                    &mut live,
+                    brain.as_ref(),
+                    &mut tts,
+                    frame,
+                ).await?;
             }
             Message::Close(_) => break,
             Message::Ping(payload) => ws.send(Message::Pong(payload)).await?,
             Message::Pong(_) => {}
             Message::Frame(_) => {}
         }
+            }
+        }
     }
 
     info!(session_id = %session_id_text, "gateway session ended");
+    Ok(())
+}
+
+struct LiveSessionState {
+    turn_id: String,
+    assistant_started: bool,
+    saw_brain_first_token: bool,
+    sentence_buffer: SentenceBuffer,
+}
+
+impl LiveSessionState {
+    fn new(turn_id: String) -> Self {
+        Self {
+            turn_id,
+            assistant_started: false,
+            saw_brain_first_token: false,
+            sentence_buffer: SentenceBuffer::default(),
+        }
+    }
+
+    fn reset_assistant(&mut self) {
+        self.assistant_started = false;
+        self.saw_brain_first_token = false;
+        self.sentence_buffer.clear();
+    }
+}
+
+#[derive(Default)]
+struct SentenceBuffer {
+    text: String,
+}
+
+impl SentenceBuffer {
+    fn push(&mut self, delta: &str) -> Vec<String> {
+        self.text.push_str(delta);
+        let mut out = Vec::new();
+        while let Some(cut) = self.find_cut() {
+            let sentence = self.text[..cut].trim().to_string();
+            self.text = self.text[cut..].trim_start().to_string();
+            if !sentence.is_empty() {
+                out.push(sentence);
+            }
+        }
+        out
+    }
+
+    fn flush(&mut self) -> Option<String> {
+        let text = self.text.trim().to_string();
+        self.text.clear();
+        (!text.is_empty()).then_some(text)
+    }
+
+    fn clear(&mut self) {
+        self.text.clear();
+    }
+
+    fn find_cut(&self) -> Option<usize> {
+        const MIN_CHARS: usize = 28;
+        const MAX_CHARS: usize = 90;
+        for (idx, ch) in self.text.char_indices() {
+            if !matches!(ch, '.' | '!' | '?' | ';' | ':') {
+                continue;
+            }
+            let cut = idx + ch.len_utf8();
+            if cut >= MIN_CHARS {
+                return Some(cut);
+            }
+        }
+        (self.text.len() > MAX_CHARS).then_some(MAX_CHARS)
+    }
+}
+
+async fn drain_adapter_frames(
+    ws: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+    pipeline: &mut LinearPipeline,
+    trace: &TraceWriter,
+    avatar_router: &AvatarActionRouter,
+    live: &mut LiveSessionState,
+    brain: Option<&Arc<Mutex<PiRpcBrain>>>,
+    stt: &mut Option<Box<dyn SttAdapter>>,
+    tts: &mut Option<Box<dyn TtsAdapter>>,
+) -> Result<()> {
+    if let Some(stt) = stt.as_deref_mut() {
+        while let Some(frame) = stt.try_next_frame() {
+            handle_runtime_frame(ws, pipeline, trace, avatar_router, live, brain, tts, frame)
+                .await?;
+        }
+    }
+    if let Some(brain) = brain {
+        loop {
+            let frame = { brain.lock().await.try_next_frame() };
+            let Some(frame) = frame else { break };
+            handle_runtime_frame(
+                ws,
+                pipeline,
+                trace,
+                avatar_router,
+                live,
+                Some(brain),
+                tts,
+                frame,
+            )
+            .await?;
+        }
+    }
+    loop {
+        let frame = tts.as_deref_mut().and_then(TtsAdapter::try_next_frame);
+        let Some(frame) = frame else { break };
+        let mut no_tts = None;
+        handle_runtime_frame(
+            ws,
+            pipeline,
+            trace,
+            avatar_router,
+            live,
+            brain,
+            &mut no_tts,
+            frame,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn handle_runtime_frame(
+    ws: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+    pipeline: &mut LinearPipeline,
+    trace: &TraceWriter,
+    avatar_router: &AvatarActionRouter,
+    live: &mut LiveSessionState,
+    brain: Option<&Arc<Mutex<PiRpcBrain>>>,
+    tts: &mut Option<Box<dyn TtsAdapter>>,
+    frame: FrameEnvelope,
+) -> Result<()> {
+    if let Some((event, data)) = stt_trace_event(&frame) {
+        trace.event(event, data)?;
+    }
+    if let Some((event, data)) = qwen_worker_trace_event(&frame) {
+        trace.event(event, data)?;
+    }
+    let frames = process_pipeline_outputs(ws, pipeline, trace, avatar_router, frame).await?;
+    for frame in frames {
+        match frame.frame {
+            Frame::Stt(SttFrame::Error { message }) => {
+                send_error(ws, "stt_error", &message).await?;
+            }
+            Frame::Turn(TurnFrame::UserStarted) => {
+                send_event(
+                    ws,
+                    &ServerEvent::Phase {
+                        phase: "listening".to_string(),
+                    },
+                )
+                .await?;
+            }
+            Frame::Turn(TurnFrame::UserCommitted { text }) => {
+                if let Some(brain) = brain {
+                    let request = brain.lock().await.prompt(&text).await?;
+                    trace.event(
+                        EVENT_BRAIN_REQUEST_START,
+                        json!({ "text_chars": text.chars().count() }),
+                    )?;
+                    process_pipeline_outputs(ws, pipeline, trace, avatar_router, request).await?;
+                    send_event(
+                        ws,
+                        &ServerEvent::Phase {
+                            phase: "thinking".to_string(),
+                        },
+                    )
+                    .await?;
+                }
+            }
+            Frame::Turn(TurnFrame::Interrupted { .. }) => {
+                live.reset_assistant();
+                send_event(
+                    ws,
+                    &ServerEvent::AudioReset {
+                        reason: Some("interrupted".to_string()),
+                    },
+                )
+                .await?;
+                send_event(
+                    ws,
+                    &ServerEvent::Phase {
+                        phase: "interrupted".to_string(),
+                    },
+                )
+                .await?;
+            }
+            Frame::Brain(BrainFrame::TextDelta { text }) => {
+                if !live.assistant_started {
+                    live.assistant_started = true;
+                    send_event(
+                        ws,
+                        &ServerEvent::TurnStarted {
+                            turn_id: live.turn_id.clone(),
+                            character: None,
+                        },
+                    )
+                    .await?;
+                }
+                if !live.saw_brain_first_token {
+                    live.saw_brain_first_token = true;
+                    trace.event(EVENT_BRAIN_FIRST_TOKEN, json!({}))?;
+                }
+                send_event(
+                    ws,
+                    &ServerEvent::AssistantDelta {
+                        turn_id: live.turn_id.clone(),
+                        delta: text.clone(),
+                    },
+                )
+                .await?;
+                if let Some(tts) = tts.as_deref_mut() {
+                    for sentence in live.sentence_buffer.push(&text) {
+                        let request = tts.speak(frame.session_id.clone(), sentence).await?;
+                        process_pipeline_outputs(ws, pipeline, trace, avatar_router, request)
+                            .await?;
+                    }
+                }
+            }
+            Frame::Brain(BrainFrame::Done) => {
+                if let (Some(tts), Some(text)) = (tts.as_deref_mut(), live.sentence_buffer.flush())
+                {
+                    let request = tts.speak(frame.session_id.clone(), text).await?;
+                    process_pipeline_outputs(ws, pipeline, trace, avatar_router, request).await?;
+                }
+                send_event(
+                    ws,
+                    &ServerEvent::TurnCompleted {
+                        turn_id: live.turn_id.clone(),
+                    },
+                )
+                .await?;
+                send_event(
+                    ws,
+                    &ServerEvent::Phase {
+                        phase: "speaking".to_string(),
+                    },
+                )
+                .await?;
+            }
+            Frame::Brain(BrainFrame::Error { message }) => {
+                send_error(ws, "brain_error", &message).await?;
+            }
+            Frame::Brain(BrainFrame::ToolCall { name, arguments }) => {
+                send_event(ws, &ServerEvent::FrontendToolCall { name, arguments }).await?;
+            }
+            Frame::Tts(TtsFrame::Error { message }) => {
+                send_error(ws, "tts_error", &message).await?;
+            }
+            Frame::Audio(AudioFrame::OutputPcm { bytes, .. }) => {
+                trace.event(
+                    EVENT_FRONTEND_AUDIO_PLAY_SCHEDULED,
+                    json!({ "bytes": bytes.len() }),
+                )?;
+                ws.send(Message::Binary(bytes.to_vec())).await?;
+            }
+            _ => {}
+        }
+    }
     Ok(())
 }
 
@@ -406,6 +762,138 @@ async fn process_pipeline_outputs(
     Ok(out)
 }
 
+fn build_stt_adapter(name: &str) -> Result<Box<dyn SttAdapter>> {
+    crate::stt::ensure_supported_stt_backend(name)?;
+    let config = ParakeetSileroConfig {
+        url: env::var("FOXLINE_STT_WS_URL")
+            .or_else(|_| env::var("VITE_PARAKEET_CPP_STT_URL"))
+            .unwrap_or_else(|_| "ws://127.0.0.1:8796/ws".to_string()),
+        ..ParakeetSileroConfig::default()
+    };
+    Ok(Box::new(ParakeetSileroSttAdapter::new(config)))
+}
+
+fn build_tts_adapter(
+    name: &str,
+    agent: &str,
+    workspace: &std::path::Path,
+) -> Result<Box<dyn TtsAdapter>> {
+    crate::tts::ensure_supported_tts_backend(name)?;
+    let repo = repo_root();
+    let worker = env::var("CODEC_TTS_WORKER_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| repo.join("services/qwen3_tts_worker.py"));
+    let reference = resolve_voice_reference(agent, workspace, &repo)?;
+    let sample_rate = env::var("CODEC_TTS_WORKER_SAMPLE_RATE")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(24_000);
+    let mut args = vec![
+        "run".to_string(),
+        "--no-project".to_string(),
+        "--with".to_string(),
+        "speech-to-speech==0.2.9".to_string(),
+        "python".to_string(),
+        worker.display().to_string(),
+        "--serve".to_string(),
+        "--model-name".to_string(),
+        env::var("CODEC_TTS_MODEL")
+            .or_else(|_| env::var("QWEN3_TTS_MODEL"))
+            .unwrap_or_else(|_| "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit".to_string()),
+        "--ref-audio".to_string(),
+        reference.wav.display().to_string(),
+        "--ref-text-file".to_string(),
+        reference.txt.display().to_string(),
+        "--language".to_string(),
+        env::var("QWEN3_TTS_LANGUAGE").unwrap_or_else(|_| "auto".to_string()),
+        "--output-sample-rate".to_string(),
+        sample_rate.to_string(),
+        "--temperature".to_string(),
+        env::var("QWEN3_TTS_TEMPERATURE").unwrap_or_else(|_| "0.7".to_string()),
+        "--top-k".to_string(),
+        env::var("QWEN3_TTS_TOP_K").unwrap_or_else(|_| "30".to_string()),
+        "--blocksize".to_string(),
+        env::var("CODEC_TTS_WORKER_BLOCKSIZE").unwrap_or_else(|_| "2048".to_string()),
+    ];
+    if let Ok(seed) = env::var("QWEN3_TTS_SEED") {
+        args.push("--seed".to_string());
+        args.push(seed);
+    }
+    let mut config = QwenWorkerConfig::new(
+        env::var("CODEC_TTS_WORKER_COMMAND").unwrap_or_else(|_| "uv".to_string()),
+        args,
+        repo,
+    );
+    config.output_sample_rate_hz = sample_rate;
+    Ok(Box::new(QwenWorkerTtsAdapter::new(config)))
+}
+
+struct VoiceReference {
+    wav: PathBuf,
+    txt: PathBuf,
+}
+
+fn resolve_voice_reference(
+    agent: &str,
+    workspace: &std::path::Path,
+    repo: &std::path::Path,
+) -> Result<VoiceReference> {
+    if let (Ok(wav), Ok(txt)) = (
+        env::var("FOXLINE_TTS_REF_AUDIO").or_else(|_| env::var("CODEC_TTS_REF_AUDIO")),
+        env::var("FOXLINE_TTS_REF_TEXT_FILE").or_else(|_| env::var("CODEC_TTS_REF_TEXT_FILE")),
+    ) {
+        return Ok(VoiceReference {
+            wav: PathBuf::from(wav),
+            txt: PathBuf::from(txt),
+        });
+    }
+    let candidates = [
+        workspace.join("agents").join(agent),
+        repo.join("agents").join(agent),
+    ];
+    for character_dir in candidates {
+        for dir in [
+            character_dir.join("assets/reference_audio"),
+            character_dir.join("assets"),
+        ] {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+                {
+                    let txt = path
+                        .with_extension("txt")
+                        .exists()
+                        .then(|| path.with_extension("txt"))
+                        .or_else(|| {
+                            let sidecar = PathBuf::from(format!("{}.txt", path.display()));
+                            sidecar.exists().then_some(sidecar)
+                        });
+                    if let Some(txt) = txt {
+                        return Ok(VoiceReference { wav: path, txt });
+                    }
+                }
+            }
+        }
+    }
+    anyhow::bail!(
+        "No TTS reference wav/transcript found for agent {agent}; set FOXLINE_TTS_REF_AUDIO and FOXLINE_TTS_REF_TEXT_FILE"
+    )
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 async fn send_error<S>(ws: &mut S, code: &str, message: &str) -> Result<()>
 where
     S: SinkExt<Message> + Unpin,
@@ -429,4 +917,40 @@ where
     ws.send(Message::Text(serde_json::to_string(event)?))
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::{resolve_voice_reference, SentenceBuffer};
+
+    #[test]
+    fn sentence_buffer_emits_sentence_sized_chunks_and_flushes_tail() {
+        let mut buffer = SentenceBuffer::default();
+
+        assert!(buffer.push("Short.").is_empty());
+        let chunks = buffer.push(" This is long enough to speak now.");
+
+        assert_eq!(chunks, vec!["Short. This is long enough to speak now."]);
+        assert!(buffer.push(" Tail without punctuation").is_empty());
+        assert_eq!(buffer.flush().as_deref(), Some("Tail without punctuation"));
+    }
+
+    #[test]
+    fn voice_reference_resolves_repo_agent_sidecars() {
+        let repo = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let ref_dir = repo.path().join("agents/campbell/assets/reference_audio");
+        fs::create_dir_all(&ref_dir).unwrap();
+        fs::write(ref_dir.join("voice.wav"), b"wav").unwrap();
+        fs::write(ref_dir.join("voice.txt"), "reference transcript").unwrap();
+
+        let reference = resolve_voice_reference("campbell", workspace.path(), repo.path()).unwrap();
+
+        assert_eq!(reference.wav, ref_dir.join("voice.wav"));
+        assert_eq!(reference.txt, ref_dir.join("voice.txt"));
+    }
 }
