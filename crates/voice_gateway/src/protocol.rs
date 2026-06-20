@@ -63,4 +63,15 @@ pub enum ServerEvent {
     AvatarAction {
         action: Value,
     },
+    FrontendToolsNegotiated {
+        tools: Vec<String>,
+    },
+    FrontendToolCall {
+        name: String,
+        arguments: Value,
+    },
+    FrontendToolRejected {
+        name: String,
+        reason: String,
+    },
 }

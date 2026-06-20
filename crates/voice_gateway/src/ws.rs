@@ -12,12 +12,13 @@ use crate::{
     brain::{BrainIdentity, BrainPool},
     config::GatewayConfig,
     frame::{
-        AudioFrame, Frame, FrameEnvelope, InterruptReason, LifecycleFrame, SessionId, TurnFrame,
-        VadFrame,
+        AudioFrame, Frame, FrameEnvelope, FrontendToolFrame, InterruptReason, LifecycleFrame,
+        SessionId, TurnFrame, VadFrame,
     },
     loadout::LoadoutResolver,
     pipeline::{default_pipeline, LinearPipeline},
     protocol::{ClientControl, ServerEvent},
+    tools::{FrontendToolNegotiation, FrontendToolRouter},
     trace::{
         TraceWriter, EVENT_BARGE_IN_RECEIVED, EVENT_MIC_FRAME_RECEIVED, EVENT_TTS_CANCEL_SENT,
     },
@@ -54,7 +55,9 @@ async fn handle_connection(
     let trace = TraceWriter::create(config.trace_dir.clone(), &session_id_text)?;
     let mut capabilities_declared = false;
     let mut frontend_capability_profile = json!({});
+    let mut advertised_frontend_tools = Vec::<String>::new();
     let mut avatar_router = AvatarActionRouter::default();
+    let mut tool_router: Option<FrontendToolRouter> = None;
     let mut session_started = false;
     let mut pipeline = default_pipeline(config.turn.clone());
 
@@ -80,6 +83,7 @@ async fn handle_connection(
                 match event {
                     ClientControl::Hello { capabilities, .. } => {
                         capabilities_declared = true;
+                        advertised_frontend_tools = capabilities.tools.clone();
                         avatar_router =
                             AvatarActionRouter::new(capabilities.avatar_actions.clone());
                         frontend_capability_profile = serde_json::to_value(&capabilities)?;
@@ -121,6 +125,20 @@ async fn handle_connection(
                             resolved.name.clone(),
                             &frontend_capability_profile,
                         );
+                        let tool_negotiation = FrontendToolNegotiation::negotiate(
+                            &resolved.loadout.tools,
+                            &advertised_frontend_tools,
+                        );
+                        if let Err(err) = tool_negotiation.ensure_startup_allowed() {
+                            send_error(&mut ws, "frontend_tools_missing", &err.to_string()).await?;
+                            continue;
+                        }
+                        let negotiated_tools = tool_negotiation
+                            .effective
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        tool_router = Some(FrontendToolRouter::new(tool_negotiation.clone()));
                         let brain =
                             match brain_pool.get_or_prewarm(identity.clone(), &resolved).await {
                                 Ok(brain) => brain,
@@ -143,6 +161,7 @@ async fn handle_connection(
                                 "tts": resolved.loadout.adapters.tts,
                                 "prewarm": resolved.loadout.lifecycle.prewarm,
                                 "keep_warm_ms": resolved.loadout.lifecycle.keep_warm_ms,
+                                "frontend_tools": negotiated_tools,
                             }),
                         )?;
                         trace.event(
@@ -157,6 +176,14 @@ async fn handle_connection(
                             }),
                         )?;
                         session_started = true;
+                        process_pipeline_outputs(
+                            &mut ws,
+                            &mut pipeline,
+                            &trace,
+                            &avatar_router,
+                            tool_negotiation.negotiated_frame(session_id.clone()),
+                        )
+                        .await?;
                         let frame = FrameEnvelope::new(
                             session_id.clone(),
                             Frame::Lifecycle(LifecycleFrame::SessionStarted),
@@ -230,8 +257,26 @@ async fn handle_connection(
                         )
                         .await?;
                     }
-                    ClientControl::FrontendToolResult { .. } => {
-                        warn!("frontend tool result received before tool router is implemented");
+                    ClientControl::FrontendToolResult { call_id, result } => {
+                        if let Some(router) = &tool_router {
+                            let frame = router.result_frame(session_id.clone(), call_id, result);
+                            process_pipeline_outputs(
+                                &mut ws,
+                                &mut pipeline,
+                                &trace,
+                                &avatar_router,
+                                frame,
+                            )
+                            .await?;
+                        } else {
+                            warn!("frontend tool result received before session negotiation");
+                            send_error(
+                                &mut ws,
+                                "frontend_tools_not_negotiated",
+                                "start a session before sending frontend tool results",
+                            )
+                            .await?;
+                        }
                     }
                 }
             }
@@ -308,6 +353,43 @@ async fn process_pipeline_outputs(
                 } else {
                     trace.event("avatar_action_rejected", json!({ "reason": "unsupported" }))?;
                 }
+            }
+            Frame::FrontendTool(FrontendToolFrame::Negotiated { tools }) => {
+                send_event(
+                    ws,
+                    &ServerEvent::FrontendToolsNegotiated {
+                        tools: tools.clone(),
+                    },
+                )
+                .await?;
+                trace.event("frontend_tools_negotiated", json!({ "tools": tools }))?;
+            }
+            Frame::FrontendTool(FrontendToolFrame::Call { name, arguments }) => {
+                send_event(
+                    ws,
+                    &ServerEvent::FrontendToolCall {
+                        name: name.clone(),
+                        arguments: arguments.clone(),
+                    },
+                )
+                .await?;
+            }
+            Frame::FrontendTool(FrontendToolFrame::Rejected { name, reason }) => {
+                send_event(
+                    ws,
+                    &ServerEvent::FrontendToolRejected {
+                        name: name.clone(),
+                        reason: reason.clone(),
+                    },
+                )
+                .await?;
+                trace.event(
+                    "frontend_tool_rejected",
+                    json!({ "name": name, "reason": reason }),
+                )?;
+            }
+            Frame::FrontendTool(FrontendToolFrame::Result { call_id, .. }) => {
+                trace.event("frontend_tool_result", json!({ "call_id": call_id }))?;
             }
             _ => {}
         }

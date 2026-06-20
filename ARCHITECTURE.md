@@ -145,6 +145,18 @@ Avatar Actions are semantic presentation requests, not Codec/MGS sprite commands
 
 The Foxline Codec UI maps these semantic actions to its own visual language; KITT, oqto, and future clients can map the same actions differently.
 
+## Frontend tools
+
+Frontend tools are negotiated at session startup. The effective tool surface is:
+
+```text
+(loadout.required_frontend + loadout.optional_frontend) ∩ frontend.advertised_tools
+```
+
+Missing required frontend tools fail session startup with a clear error. Optional tools are available only when the frontend advertises them. Tool calls that are not part of the negotiated surface are rejected by the gateway before reaching the frontend.
+
+The gateway emits `frontend_tools_negotiated`, `frontend_tool_call`, `frontend_tool_rejected`, and accepts `frontend_tool_result` control messages. Pi can reach these through the voice-only frontend-tools extension path once the extension implementation is filled in.
+
 ## Why worker processes instead of HTTP services
 
 - Lower latency: PCM can stream as soon as the worker emits it.

@@ -11,4 +11,5 @@
 - Added semantic Avatar Action routing with frontend capability checks and theme-agnostic `avatar_action` server events.
 - Added the TTS adapter interface and Qwen3 worker backend protocol mapping for speak, audio_start, audio_chunk, audio_done, error, cancel, shutdown, binary audio frames, and comparable trace events.
 - Added the STT adapter interface and Parakeet/Silero WebSocket backend protocol mapping for PCM input, VAD evidence, partial/final transcripts, errors, reset, and comparable trace events.
+- Added frontend tool capability negotiation with required/optional loadout tools, advertised frontend tool intersection, startup failure for missing required tools, negotiated tool events, result frames, and unauthorized call rejection.
 - Added `just` recipes for running, checking, and testing the Rust gateway while preserving the existing TypeScript bridge path as the migration baseline.

@@ -45,6 +45,8 @@ optional_frontend = ["codec.avatar"]
 allowed_pi = ["read", "write"]
 ```
 
+`required_frontend` names must be advertised by the connected frontend or session startup fails. `optional_frontend` names are enabled only when advertised. `allowed_pi` is passed to Pi as the tool allowlist for the Brain process.
+
 ## Extension references
 
 - `builtin:<name>` resolves to a bundled gateway extension under `crates/voice_gateway/extensions/<name>`.
