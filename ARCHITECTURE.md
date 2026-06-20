@@ -41,6 +41,19 @@ The gateway frontend transport is WebSocket:
 
 Trace events use names comparable to the legacy bridge path, including `mic_frame_received`, `stt_partial`, `stt_final`, `brain_request_start`, `brain_first_token`, `tts_request_start`, `tts_audio_start`, `frontend_audio_play_scheduled`, `barge_in_received`, and `tts_cancel_sent`.
 
+## Turn management
+
+The Rust gateway owns authoritative turn state. Frontend VAD and noise-gate messages are accepted as hints, but they do not commit a user turn by themselves. STT/VAD evidence frames drive `turn.user_started`, `turn.user_committed`, and `turn.interrupted` frames inside the canonical pipeline.
+
+Turn strategy is configurable under `[turn]` in the gateway config:
+
+- `silence_timeout_ms`
+- `min_speech_duration_ms`
+- `max_utterance_duration_ms`
+- `barge_in_confirmation_window_ms`
+
+Barge-in can interrupt local gateway output immediately through a `turn.interrupted` frame while later STT/VAD evidence confirms the user speech boundary.
+
 ## Configuration
 
 The Rust gateway reads XDG-compliant config from `$XDG_CONFIG_HOME/foxline/config.toml` or `~/.config/foxline/config.toml`, creating defaults on first run. Command-line flags override the config file and environment variables can be used for deployment overrides.

@@ -1,7 +1,11 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::frame::{Frame, FrameEnvelope, InterruptReason, SessionId, TurnFrame};
+use crate::{
+    config::TurnStrategyConfig,
+    frame::{Frame, FrameEnvelope, InterruptReason, SessionId, TurnFrame},
+    turn::TurnManager,
+};
 
 #[async_trait]
 pub trait FrameProcessor: Send {
@@ -63,8 +67,9 @@ impl FrameProcessor for InterruptFanoutProcessor {
     }
 }
 
-pub fn default_pipeline() -> LinearPipeline {
+pub fn default_pipeline(turn_strategy: TurnStrategyConfig) -> LinearPipeline {
     LinearPipeline::new(vec![
+        Box::new(TurnManager::new(turn_strategy)),
         Box::new(InterruptFanoutProcessor),
         Box::new(PassthroughProcessor),
     ])
@@ -80,6 +85,8 @@ pub fn lifecycle_started(session_id: SessionId) -> FrameEnvelope {
 #[cfg(test)]
 mod tests {
     use crate::frame::{Frame, FrameEnvelope, InterruptReason, SessionId, TtsFrame, TurnFrame};
+
+    use crate::config::TurnStrategyConfig;
 
     use super::{default_pipeline, LinearPipeline, PassthroughProcessor};
 
@@ -103,7 +110,7 @@ mod tests {
                 reason: InterruptReason::FrontendBargeIn,
             }),
         );
-        let mut pipeline = default_pipeline();
+        let mut pipeline = default_pipeline(TurnStrategyConfig::default());
 
         let out = pipeline.process(frame.clone()).await.unwrap();
 

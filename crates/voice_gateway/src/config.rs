@@ -34,6 +34,7 @@ pub struct GatewayConfig {
     pub session_idle_timeout_ms: u64,
     pub brain: BrainConfig,
     pub frontend: FrontendConfig,
+    pub turn: TurnStrategyConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -51,6 +52,15 @@ pub struct FrontendConfig {
     pub max_audio_frame_bytes: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct TurnStrategyConfig {
+    pub silence_timeout_ms: u64,
+    pub min_speech_duration_ms: u64,
+    pub max_utterance_duration_ms: u64,
+    pub barge_in_confirmation_window_ms: u64,
+}
+
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
@@ -60,6 +70,7 @@ impl Default for GatewayConfig {
             session_idle_timeout_ms: 300_000,
             brain: BrainConfig::default(),
             frontend: FrontendConfig::default(),
+            turn: TurnStrategyConfig::default(),
         }
     }
 }
@@ -79,6 +90,17 @@ impl Default for FrontendConfig {
         Self {
             require_capability_declaration: true,
             max_audio_frame_bytes: 32 * 1024,
+        }
+    }
+}
+
+impl Default for TurnStrategyConfig {
+    fn default() -> Self {
+        Self {
+            silence_timeout_ms: 650,
+            min_speech_duration_ms: 180,
+            max_utterance_duration_ms: 30_000,
+            barge_in_confirmation_window_ms: 450,
         }
     }
 }
@@ -166,5 +188,11 @@ prewarm = false
 [frontend]
 require_capability_declaration = true
 max_audio_frame_bytes = 32768
+
+[turn]
+silence_timeout_ms = 650
+min_speech_duration_ms = 180
+max_utterance_duration_ms = 30000
+barge_in_confirmation_window_ms = 450
 "#
 }

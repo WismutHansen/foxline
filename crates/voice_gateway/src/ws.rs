@@ -13,7 +13,7 @@ use crate::{
         AudioFrame, Frame, FrameEnvelope, InterruptReason, LifecycleFrame, SessionId, TurnFrame,
         VadFrame,
     },
-    pipeline::default_pipeline,
+    pipeline::{default_pipeline, LinearPipeline},
     protocol::{ClientControl, ServerEvent},
     trace::{
         TraceWriter, EVENT_BARGE_IN_RECEIVED, EVENT_MIC_FRAME_RECEIVED, EVENT_TTS_CANCEL_SENT,
@@ -45,7 +45,7 @@ async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Res
     let trace = TraceWriter::create(config.trace_dir.clone(), &session_id_text)?;
     let mut capabilities_declared = false;
     let mut session_started = false;
-    let mut pipeline = default_pipeline();
+    let mut pipeline = default_pipeline(config.turn.clone());
 
     send_event(
         &mut ws,
@@ -89,6 +89,11 @@ async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Res
                             continue;
                         }
                         session_started = true;
+                        let frame = FrameEnvelope::new(
+                            session_id.clone(),
+                            Frame::Lifecycle(LifecycleFrame::SessionStarted),
+                        );
+                        process_pipeline_outputs(&mut pipeline, &trace, frame).await?;
                         send_event(
                             &mut ws,
                             &ServerEvent::SessionStarted {
@@ -98,6 +103,11 @@ async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Res
                         .await?;
                     }
                     ClientControl::EndSession => {
+                        let frame = FrameEnvelope::new(
+                            session_id.clone(),
+                            Frame::Lifecycle(LifecycleFrame::SessionEnded),
+                        );
+                        process_pipeline_outputs(&mut pipeline, &trace, frame).await?;
                         send_event(&mut ws, &ServerEvent::SessionEnded).await?;
                         break;
                     }
@@ -112,7 +122,7 @@ async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Res
                                 confidence,
                             }),
                         );
-                        let _ = pipeline.process(frame).await?;
+                        process_pipeline_outputs(&mut pipeline, &trace, frame).await?;
                     }
                     ClientControl::Interrupt => {
                         trace.event(EVENT_BARGE_IN_RECEIVED, json!({}))?;
@@ -122,11 +132,7 @@ async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Res
                                 reason: InterruptReason::FrontendBargeIn,
                             }),
                         );
-                        for out in pipeline.process(frame).await? {
-                            if matches!(out.frame, Frame::Tts(crate::frame::TtsFrame::Cancel)) {
-                                trace.event(EVENT_TTS_CANCEL_SENT, json!({}))?;
-                            }
-                        }
+                        process_pipeline_outputs(&mut pipeline, &trace, frame).await?;
                     }
                     ClientControl::FrontendToolResult { .. } => {
                         warn!("frontend tool result received before tool router is implemented");
@@ -161,7 +167,7 @@ async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Res
                         bytes: bytes.into(),
                     }),
                 );
-                let _ = pipeline.process(frame).await?;
+                process_pipeline_outputs(&mut pipeline, &trace, frame).await?;
             }
             Message::Close(_) => break,
             Message::Ping(payload) => ws.send(Message::Pong(payload)).await?,
@@ -172,6 +178,35 @@ async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Res
 
     info!(session_id = %session_id_text, "gateway session ended");
     Ok(())
+}
+
+async fn process_pipeline_outputs(
+    pipeline: &mut LinearPipeline,
+    trace: &TraceWriter,
+    frame: FrameEnvelope,
+) -> Result<Vec<FrameEnvelope>> {
+    let out = pipeline.process(frame).await?;
+    for frame in &out {
+        match &frame.frame {
+            Frame::Turn(TurnFrame::UserStarted) => {
+                trace.event("turn_user_started", json!({}))?;
+            }
+            Frame::Turn(TurnFrame::UserCommitted { text }) => {
+                trace.event(
+                    "turn_user_committed",
+                    json!({ "chars": text.chars().count() }),
+                )?;
+            }
+            Frame::Turn(TurnFrame::Interrupted { reason }) => {
+                trace.event("turn_interrupted", json!({ "reason": reason }))?;
+            }
+            Frame::Tts(crate::frame::TtsFrame::Cancel) => {
+                trace.event(EVENT_TTS_CANCEL_SENT, json!({}))?;
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
 }
 
 async fn send_error<S>(ws: &mut S, code: &str, message: &str) -> Result<()>
