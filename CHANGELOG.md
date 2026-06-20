@@ -15,4 +15,5 @@
 - Added opt-in Codec UI wiring for the Rust Voice Gateway WebSocket protocol, including frontend capability declaration, binary microphone PCM streaming, binary PCM playback handling, session lifecycle mapping, and legacy bridge fallback.
 - Added a Rust gateway latency benchmark harness with fixture runners, canonical JSONL trace comparison, +50ms budget reporting, and machine-readable summaries under `benchmarks/traces/`.
 - Wired the Rust gateway WebSocket loop into loadout-selected STT, Pi RPC Brain, and TTS adapters so live sessions can route binary microphone PCM through turn commits, assistant deltas, TTS requests, binary output PCM, interrupts, and comparable traces.
+- Added a service-backed Rust gateway audio smoke fixture path that streams local ignored PCM16/WAV utterances and waits for assistant text, turn completion, binary output audio, and trace discovery.
 - Added `just` recipes for running, checking, and testing the Rust gateway while preserving the existing TypeScript bridge path as the migration baseline.

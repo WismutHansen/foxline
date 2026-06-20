@@ -49,6 +49,18 @@ just benchmark-rust-gateway
 
 The Rust fixture declares the same frontend capability profile as the Codec UI, starts a session, sends a deterministic silent PCM frame, triggers an interrupt, and closes the session. Until the full Rust STT/Brain/TTS path is wired end to end, the latency comparator will report missing downstream milestones instead of treating them as a pass.
 
+For a service-backed smoke run, provide a local ignored PCM16 mono utterance fixture:
+
+```bash
+mkdir -p benchmarks/traces/local-fixtures
+# Put a short user-owned PCM16 mono WAV or raw .s16le/.pcm utterance here.
+# Do not commit this file; benchmarks/traces/ is ignored.
+FOXLINE_GATEWAY_TRACE_DIR=benchmarks/traces/rust-gateway just gateway
+just benchmark-rust-gateway --audio-file=benchmarks/traces/local-fixtures/utterance.wav --wait-for-assistant --wait-for-audio
+```
+
+The audio fixture streams the utterance as binary PCM frames, sends trailing silence to let STT close the turn, then waits for assistant deltas, `turn_completed`, binary output PCM, and trace discovery. Raw `.pcm`/`.s16le` input defaults to 24 kHz and can be overridden with `--raw-pcm-sample-rate=<hz>`.
+
 ## Latency comparator
 
 Compare the newest legacy and Rust traces:
