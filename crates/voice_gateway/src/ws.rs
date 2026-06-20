@@ -8,6 +8,7 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
 use crate::{
+    brain::{BrainIdentity, BrainPool},
     config::GatewayConfig,
     frame::{
         AudioFrame, Frame, FrameEnvelope, InterruptReason, LifecycleFrame, SessionId, TurnFrame,
@@ -26,25 +27,32 @@ pub async fn serve(config: GatewayConfig) -> Result<()> {
         .await
         .with_context(|| format!("bind gateway websocket {}", config.bind))?;
     info!(bind = %config.bind, "voice gateway listening");
+    let brain_pool = Arc::new(BrainPool::new(config.brain.clone()));
     let shared = Arc::new(config);
 
     loop {
         let (stream, addr) = listener.accept().await.context("accept websocket tcp")?;
         let config = Arc::clone(&shared);
+        let brain_pool = Arc::clone(&brain_pool);
         tokio::spawn(async move {
-            if let Err(err) = handle_connection(stream, config).await {
+            if let Err(err) = handle_connection(stream, config, brain_pool).await {
                 error!(%addr, error = %err, "gateway connection failed");
             }
         });
     }
 }
 
-async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Result<()> {
+async fn handle_connection(
+    stream: TcpStream,
+    config: Arc<GatewayConfig>,
+    brain_pool: Arc<BrainPool>,
+) -> Result<()> {
     let mut ws = accept_async(stream).await.context("accept websocket")?;
     let session_id = SessionId::new();
     let session_id_text = session_id.0.to_string();
     let trace = TraceWriter::create(config.trace_dir.clone(), &session_id_text)?;
     let mut capabilities_declared = false;
+    let mut frontend_capability_profile = json!({});
     let mut session_started = false;
     let mut pipeline = default_pipeline(config.turn.clone());
 
@@ -70,10 +78,11 @@ async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Res
                 match event {
                     ClientControl::Hello { capabilities, .. } => {
                         capabilities_declared = true;
+                        frontend_capability_profile = serde_json::to_value(&capabilities)?;
                         let frame = FrameEnvelope::new(
                             session_id.clone(),
                             Frame::Lifecycle(LifecycleFrame::CapabilityDeclared {
-                                profile: serde_json::to_value(capabilities)?,
+                                profile: frontend_capability_profile.clone(),
                             }),
                         );
                         let _ = pipeline.process(frame).await?;
@@ -102,6 +111,22 @@ async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Res
                                 continue;
                             }
                         };
+                        let identity = BrainIdentity::new(
+                            agent.clone(),
+                            std::path::PathBuf::from(&workspace),
+                            resolved.name.clone(),
+                            &frontend_capability_profile,
+                        );
+                        let brain =
+                            match brain_pool.get_or_prewarm(identity.clone(), &resolved).await {
+                                Ok(brain) => brain,
+                                Err(err) => {
+                                    send_error(&mut ws, "brain_prewarm_failed", &err.to_string())
+                                        .await?;
+                                    continue;
+                                }
+                            };
+                        let launch = brain.lock().await.launch().clone();
                         trace.event(
                             "loadout_resolved",
                             json!({
@@ -114,6 +139,17 @@ async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Res
                                 "tts": resolved.loadout.adapters.tts,
                                 "prewarm": resolved.loadout.lifecycle.prewarm,
                                 "keep_warm_ms": resolved.loadout.lifecycle.keep_warm_ms,
+                            }),
+                        )?;
+                        trace.event(
+                            "brain_identity_bound",
+                            json!({
+                                "agent": identity.agent,
+                                "workspace": identity.workspace.display().to_string(),
+                                "loadout": identity.loadout,
+                                "frontend_capability_hash": identity.frontend_capability_hash,
+                                "pi_command": launch.command,
+                                "pi_args": launch.args,
                             }),
                         )?;
                         session_started = true;

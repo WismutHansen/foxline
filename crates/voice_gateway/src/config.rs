@@ -44,6 +44,7 @@ pub struct BrainConfig {
     pub pi_command: String,
     pub idle_timeout_ms: u64,
     pub prewarm: bool,
+    pub no_context_files: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -90,6 +91,7 @@ impl Default for BrainConfig {
             pi_command: "pi".to_string(),
             idle_timeout_ms: 300_000,
             prewarm: false,
+            no_context_files: true,
         }
     }
 }
@@ -202,6 +204,7 @@ session_idle_timeout_ms = 300000
 pi_command = "pi"
 idle_timeout_ms = 300000
 prewarm = false
+no_context_files = true
 
 [frontend]
 require_capability_declaration = true

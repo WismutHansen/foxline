@@ -24,6 +24,8 @@ frontend client
 
 The gateway never calls LLM servers directly. Pi is always the Brain path and owns model/provider access, tools, skills, extensions, prompt templates, and session behavior.
 
+The Rust gateway binds each warm Brain process to an identity made from agent, workspace, voice loadout, and frontend capability profile. That identity determines the Pi RPC session name and prevents one frontend/tool profile from accidentally reusing another profile's warm Brain.
+
 ## Runtime defaults
 
 - Brain: pi-rpc only.
@@ -81,6 +83,26 @@ Project-local voice configuration lives under `.foxline/`; Pi-owned defaults rem
 See `docs/foxline-loadouts.md` for the current schema.
 
 Bundled loadouts/personas are examples and shared defaults. Project-local `.foxline` loadouts are the override point for workspace-specific voice constraints, frontend tool requirements, adapter selection, and voice-only extensions.
+
+## Pi RPC Brain adapter
+
+The Rust gateway's Brain adapter launches only `pi --mode rpc`. Launch arguments are derived from the selected `.foxline` loadout:
+
+- Pi profile/config/session directory fields become explicit Pi arguments.
+- Allowed Pi tools become `--tools`.
+- Resolved voice-only extensions become explicit `--extension` flags.
+- `--no-context-files` is enabled by default from gateway config to keep voice startup behavior explicit.
+
+The adapter maps Pi RPC JSONL events into canonical Brain frames:
+
+- prompt send -> `brain.request_start`
+- first text delta handling is measured by downstream trace consumers as `brain_first_token`
+- text deltas -> `brain.text_delta`
+- tool start/end -> `brain.tool_call` and `brain.tool_result`
+- agent done -> `brain.done`
+- Pi errors or rejected prompts -> `brain.error`
+
+Warm Brain lifecycle supports prewarm, idle shutdown, restart, and full shutdown. Live prompt-to-TTS routing is completed in the STT/TTS/frontend wiring tasks.
 
 ## Frontend clients
 

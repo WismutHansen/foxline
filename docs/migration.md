@@ -52,6 +52,17 @@ Migration phases:
 
 Bundled personas and loadouts can ship as metadata for demos. Project-local personas/loadouts should live in workspaces and use `.foxline` for voice overrides. Generated voice references, fillers, and avatar assets remain local and ignored.
 
+## Brain lifecycle
+
+The Rust gateway binds each Pi RPC Brain to:
+
+- agent id
+- workspace path
+- voice loadout name
+- frontend capability profile hash
+
+This identity controls warm Brain reuse. The gateway may prewarm a Brain when the loadout or global config requests it, can shut down idle Brains, can restart a Brain after failure, and must pass voice-only extensions with explicit `--extension` flags. The gateway must not call a model provider or LLM server directly.
+
 ## Future clients
 
 KITT, oqto, Tauri, and other clients should connect as frontend clients to the gateway WebSocket protocol. The gateway should stay theme-agnostic: clients own visuals, playback UX, and any mapping from semantic Avatar Actions to their presentation system.
