@@ -208,7 +208,7 @@ export class RustVoiceGatewayClient {
   private reconnectTimer?: number;
   private reconnectDelayMs = 1000;
   private readonly agent = import.meta.env.VITE_FOXLINE_GATEWAY_AGENT || 'campbell';
-  private readonly workspace = import.meta.env.VITE_FOXLINE_GATEWAY_WORKSPACE || '.';
+  private readonly workspace = import.meta.env.VITE_FOXLINE_GATEWAY_WORKSPACE || `agents/${this.agent}`;
   private readonly loadout = import.meta.env.VITE_FOXLINE_GATEWAY_LOADOUT || 'default';
 
   constructor(private url = import.meta.env.VITE_FOXLINE_GATEWAY_URL || 'ws://127.0.0.1:8780') {
