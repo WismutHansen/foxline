@@ -106,7 +106,11 @@ Optional shortcuts:
 ```bash
 just install
 just dev
+just gateway-check
+just gateway -- --bind 127.0.0.1:8780
 ```
+
+The Rust Voice Gateway is under active migration in `crates/voice_gateway`. The current demo path still uses `server/bridge.ts` until benchmark parity is proven. See `ARCHITECTURE.md`, `docs/migration.md`, `docs/benchmarks.md`, and `docs/foxline-loadouts.md`.
 
 ## Generated outputs
 

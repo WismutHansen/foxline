@@ -30,6 +30,14 @@ The gateway never calls LLM servers directly. Pi is always the Brain path and ow
 - TTS: Qwen3-TTS only.
 - STT: parakeet.cpp by default, currently with Silero VAD for turn detection.
 
+## Product boundaries
+
+- Voice Gateway: reusable Rust runtime for voice sessions, frame routing, adapters, Pi RPC lifecycle, frontend tools, avatar actions, and tracing.
+- Foxline Codec UI: browser frontend skin that maps the gateway protocol to the Metal Gear Solid-style Codec experience.
+- Brain: Pi RPC process. It owns reasoning, model/provider access, tool use, skills, extensions, prompt templates, and session behavior.
+- Agent: Pi-backed working identity rooted in a workspace and Pi configuration.
+- Persona: presentational voice/UI identity for a frontend. A bundled demo persona may include metadata and instructions, but generated voice and avatar assets stay local and out of git.
+
 ## Rust Voice Gateway protocol
 
 The gateway frontend transport is WebSocket:
@@ -71,6 +79,14 @@ just gateway --print-config-schema
 Project-local voice configuration lives under `.foxline/`; Pi-owned defaults remain under `.pi/`. The gateway resolves loadouts from `.foxline/loadouts/<name>.toml` or `.foxline/loadout.toml` for the default loadout, then resolves voice-only extensions from bundled `builtin:` references or project-local `.foxline/extensions/` paths.
 
 See `docs/foxline-loadouts.md` for the current schema.
+
+Bundled loadouts/personas are examples and shared defaults. Project-local `.foxline` loadouts are the override point for workspace-specific voice constraints, frontend tool requirements, adapter selection, and voice-only extensions.
+
+## Frontend clients
+
+Foxline Codec UI, KITT, oqto, and future clients should all connect through the same gateway WebSocket protocol. Client-specific visuals stay in the client. The gateway only emits semantic events and Avatar Actions, and the client maps those to its own presentation.
+
+Browser and Tauri clients should use the same WebSocket transport unless a measured latency or packaging issue requires a separate transport later.
 
 ## Why worker processes instead of HTTP services
 
@@ -115,3 +131,5 @@ Important models:
 - `services/` - worker/service adapters that are runtime-adjacent.
 - `tools/` - install-time/extraction utilities only.
 - `scripts/` - user-facing shell entrypoints.
+- `agents/` - bundled demo agent/persona metadata only; generated voice/avatar assets remain local.
+- `docs/` - architecture, migration, benchmark, extraction, and loadout notes.
