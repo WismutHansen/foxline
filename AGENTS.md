@@ -13,6 +13,14 @@ trx close <id> --reason "Done" --json         # Complete work
 
 Priorities: 0=critical, 1=high, 2=medium (default), 3=low, 4=backlog
 
+## Architecture Context
+
+- Read `CONTEXT.md` for the project glossary before changing architecture or naming core concepts.
+- Read `docs/adr/` before changing runtime boundaries, gateway design, voice protocols, or Pi integration decisions.
+- New hard-to-reverse architectural decisions should be captured as ADRs and linked from related `trx` issues.
+- Keep `CONTEXT.md` and relevant ADRs up to date as terminology and architectural decisions evolve.
+- Keep `CHANGELOG.md` up to date for user-visible changes, architecture shifts, and migration notes. Create it if it does not exist.
+
 ## Repo
 
 This is the `foxline` layout. It contains source code, runtime code, install tooling, and metadata only.
