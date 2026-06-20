@@ -115,6 +115,18 @@ The Rust gateway exposes TTS through an adapter trait. The first backend is `qwe
 
 Reserved backend names are `rust-mlx`, `rust-candle`, `cpp-ggml`, `elevenlabs`, and `openai`; they are explicit future adapter slots, not active Brain paths.
 
+## STT adapter
+
+The Rust gateway exposes STT through an adapter trait. The first backend is `parakeet-silero`, matching the current `services/parakeet_silero_ws_server.py` WebSocket protocol:
+
+- binary messages carry PCM audio to the STT service.
+- `word` and `interim` messages map to canonical STT partial frames.
+- `final` messages map to VAD speech-stop evidence plus canonical STT final frames.
+- status messages such as speech start/end map to VAD evidence frames.
+- errors map to canonical STT error frames.
+
+The turn manager consumes these VAD/STT frames as authoritative turn evidence. Trace events for first partial and final transcript use names comparable to the legacy bridge.
+
 ## Frontend clients
 
 Foxline Codec UI, KITT, oqto, and future clients should all connect through the same gateway WebSocket protocol. Client-specific visuals stay in the client. The gateway only emits semantic events and Avatar Actions, and the client maps those to its own presentation.
