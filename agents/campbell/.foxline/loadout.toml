@@ -1,0 +1,15 @@
+[pi]
+model = "LM-Studio/gemma-4-26b-a4b-it"
+thinking = "minimal"
+append_system_prompt_file = "SYSTEM.md"
+
+[adapters]
+stt = "parakeet-silero"
+tts = "qwen3-worker"
+
+[lifecycle]
+prewarm = true
+keep_warm_ms = 300000
+
+[tools]
+allowed_pi = ["read", "write", "edit", "bash"]

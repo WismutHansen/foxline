@@ -30,6 +30,9 @@ extensions = ["builtin:frontend-tools", "local:project-tools"]
 profile = "voice"
 config = ".pi/config.toml"
 session_dir = ".pi/sessions"
+model = "LM-Studio/gemma-4-26b-a4b-it"
+thinking = "minimal"
+append_system_prompt_file = "SYSTEM.md"
 
 [lifecycle]
 prewarm = true
@@ -46,6 +49,8 @@ allowed_pi = ["read", "write"]
 ```
 
 `required_frontend` names must be advertised by the connected frontend or session startup fails. `optional_frontend` names are enabled only when advertised. `allowed_pi` is passed to Pi as the tool allowlist for the Brain process.
+
+`model`, `thinking`, and prompt fields are optional Pi launch settings for voice loadouts. `append_system_prompt` passes inline text to Pi with `--append-system-prompt`; `append_system_prompt_file` reads a workspace-relative file and passes its contents with `--append-system-prompt`.
 
 ## Extension references
 

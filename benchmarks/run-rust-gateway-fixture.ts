@@ -12,12 +12,12 @@ type Fixture = {
 const fixturePath = resolve(argValue('--fixture') || 'benchmarks/fixtures/legacy-bridge-utterance.json');
 const url = argValue('--url') || process.env.FOXLINE_GATEWAY_WS_URL || 'ws://127.0.0.1:8780';
 const traceDir = resolve(argValue('--trace-dir') || process.env.FOXLINE_GATEWAY_TRACE_DIR || 'benchmarks/traces/rust-gateway');
-const workspace = argValue('--workspace') || process.env.FOXLINE_GATEWAY_WORKSPACE || '.';
 const loadout = argValue('--loadout') || process.env.FOXLINE_GATEWAY_LOADOUT || 'default';
 const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as Fixture;
 const timeoutMs = Number(argValue('--timeout-ms') || fixture.timeoutMs || 60000);
 const pcmBytes = Number(argValue('--pcm-bytes') || 4096);
 const character = argValue('--agent') || fixture.character || 'campbell';
+const workspace = argValue('--workspace') || process.env.FOXLINE_GATEWAY_WORKSPACE || `agents/${character}`;
 const audioFile = argValue('--audio-file');
 const rawPcmSampleRate = Number(argValue('--raw-pcm-sample-rate') || 24000);
 const chunkMs = Number(argValue('--chunk-ms') || 80);
@@ -188,7 +188,7 @@ function canComplete() {
 }
 
 function expectedTraceEvents() {
-  const events = ['session_started'];
+  const events = ['loadout_resolved', 'brain_identity_bound'];
   if (audio) events.push('stt_final', 'turn_user_committed');
   if (waitForAssistant) events.push('brain_first_token');
   if (waitForAudio) events.push('tts_audio_start', 'frontend_audio_play_scheduled');

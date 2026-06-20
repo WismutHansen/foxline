@@ -25,6 +25,10 @@ pub struct PiLoadout {
     pub profile: Option<String>,
     pub config: Option<String>,
     pub session_dir: Option<String>,
+    pub model: Option<String>,
+    pub thinking: Option<String>,
+    pub append_system_prompt: Option<String>,
+    pub append_system_prompt_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -209,6 +213,9 @@ extensions = ["builtin:frontend-tools", "local:project-tools"]
 
 [pi]
 profile = "voice"
+model = "LM-Studio/gemma-4-26b-a4b-it"
+thinking = "minimal"
+append_system_prompt_file = "SYSTEM.md"
 
 [tools]
 required_frontend = ["codec.display"]
@@ -234,6 +241,15 @@ keep_warm_ms = 600000
 
         assert_eq!(resolved.name, "default");
         assert_eq!(resolved.loadout.pi.profile.as_deref(), Some("voice"));
+        assert_eq!(
+            resolved.loadout.pi.model.as_deref(),
+            Some("LM-Studio/gemma-4-26b-a4b-it")
+        );
+        assert_eq!(resolved.loadout.pi.thinking.as_deref(), Some("minimal"));
+        assert_eq!(
+            resolved.loadout.pi.append_system_prompt_file.as_deref(),
+            Some("SYSTEM.md")
+        );
         assert_eq!(resolved.loadout.tools.required_frontend, ["codec.display"]);
         assert_eq!(resolved.extension_paths, vec![builtin, local]);
         assert!(resolved.loadout.lifecycle.prewarm);

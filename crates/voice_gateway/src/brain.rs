@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fs,
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -99,9 +100,32 @@ impl PiLaunch {
                     .to_string(),
             );
         }
+        if let Some(model) = &loadout.loadout.pi.model {
+            args.push("--model".to_string());
+            args.push(model.clone());
+        }
+        if let Some(thinking) = &loadout.loadout.pi.thinking {
+            args.push("--thinking".to_string());
+            args.push(thinking.clone());
+        }
         if !loadout.loadout.tools.allowed_pi.is_empty() {
             args.push("--tools".to_string());
             args.push(loadout.loadout.tools.allowed_pi.join(","));
+        }
+        if let Some(prompt) = &loadout.loadout.pi.append_system_prompt {
+            if !prompt.trim().is_empty() {
+                args.push("--append-system-prompt".to_string());
+                args.push(prompt.clone());
+            }
+        }
+        if let Some(prompt_file) = &loadout.loadout.pi.append_system_prompt_file {
+            let path = resolve_workspace_path(&loadout.workspace, prompt_file);
+            if let Ok(prompt) = fs::read_to_string(&path) {
+                if !prompt.trim().is_empty() {
+                    args.push("--append-system-prompt".to_string());
+                    args.push(prompt);
+                }
+            }
         }
         for extension in &loadout.extension_paths {
             args.push("--extension".to_string());
@@ -501,7 +525,11 @@ mod tests {
         loadout.pi.profile = Some("voice".to_string());
         loadout.pi.config = Some(".pi/config.toml".to_string());
         loadout.pi.session_dir = Some(".pi/sessions".to_string());
+        loadout.pi.model = Some("LM-Studio/gemma-4-26b-a4b-it".to_string());
+        loadout.pi.thinking = Some("minimal".to_string());
+        loadout.pi.append_system_prompt_file = Some("SYSTEM.md".to_string());
         loadout.tools.allowed_pi = vec!["read".to_string(), "write".to_string()];
+        fs::write(workspace.join("SYSTEM.md"), "Stay concise.").unwrap();
         let extension = workspace.join(".foxline/extensions/frontend-tools");
         fs::create_dir_all(&extension).unwrap();
         ResolvedLoadout {
@@ -541,6 +569,18 @@ mod tests {
             .args
             .iter()
             .any(|arg| arg.ends_with(".pi/config.toml")));
+        assert!(launch
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--model", "LM-Studio/gemma-4-26b-a4b-it"]));
+        assert!(launch
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--thinking", "minimal"]));
+        assert!(launch
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--append-system-prompt", "Stay concise."]));
         assert!(launch
             .args
             .windows(2)

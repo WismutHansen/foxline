@@ -185,8 +185,17 @@ def make_app(args: argparse.Namespace) -> FastAPI:
                         await ws.send_text(json.dumps({"type": "status", "message": "parakeet-silero language auto"}))
         except WebSocketDisconnect:
             pass
+        except RuntimeError as exc:
+            if "disconnect message has been received" not in str(exc):
+                try:
+                    await ws.send_text(json.dumps({"type": "error", "message": str(exc)}))
+                except RuntimeError:
+                    pass
         except Exception as exc:
-            await ws.send_text(json.dumps({"type": "error", "message": str(exc)}))
+            try:
+                await ws.send_text(json.dumps({"type": "error", "message": str(exc)}))
+            except RuntimeError:
+                pass
         finally:
             await session.close()
 

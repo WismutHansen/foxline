@@ -22,3 +22,4 @@
 - Prewarmed the Qwen TTS worker on Rust gateway session startup to avoid first-response cold-start latency.
 - Added benchmark fixture support for interrupt-on-audio runs, corrected Rust trace discovery to select traces with the requested milestones, and made the latency comparator use completed fixture windows inside session-long traces.
 - Proved a service-backed Rust gateway smoke path through frontend WebSocket, STT, turn commit, Pi RPC Brain, Qwen TTS, and binary frontend audio; full latency parity remains open for real legacy audio/STT and paired barge-in cancellation traces.
+- Added legacy audio/STT benchmark replay, Pi model/thinking/prompt loadout fields, and a Campbell voice loadout that prewarms Pi with the legacy baseline settings; the live comparator now passes the +50ms budget for STT final, Brain first token, TTS first audio, frontend audio scheduling, and barge-in cancel.

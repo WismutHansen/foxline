@@ -40,6 +40,14 @@ just benchmark-legacy-bridge
 
 The runner sends `benchmarks/fixtures/legacy-bridge-utterance.json` to the bridge over WebSocket and waits for `turn_completed`. It expects the bridge, Pi RPC, and TTS/STT services needed by the demo to already be available.
 
+For an audio/STT baseline, provide the same local ignored PCM16 mono utterance used by the Rust fixture:
+
+```bash
+just benchmark-legacy-bridge --audio-file=benchmarks/traces/local-fixtures/utterance.wav --interrupt-on-audio
+```
+
+The legacy bridge does not accept binary microphone frames directly; in the demo, browser STT turns microphone audio into a final `user_utterance`. The audio fixture reproduces that boundary by streaming Float32 PCM to the Parakeet/Silero STT WebSocket, writing `client_stt_audio_frame_sent` trace markers for comparable `mic_frame_received` aliases, then sending the final transcript to the bridge.
+
 Start the Rust gateway with benchmark-local traces, then run:
 
 ```bash
@@ -96,10 +104,9 @@ Measured metrics:
 
 Current proof status:
 
-- A service-backed Rust gateway smoke run has passed through frontend WebSocket, Parakeet/Silero STT, gateway turn commit, Pi RPC Brain, Qwen TTS worker, and binary output PCM.
-- `brain_first_token`, `tts_audio_start`, and `frontend_audio_play_scheduled` measured faster than the available legacy text-injection fixture window in the captured traces.
-- `stt_final` is not yet comparable against the legacy bridge fixture because the legacy runner injects text instead of replaying microphone audio through the legacy STT path.
-- `barge_in_cancel` remains unproven until both paths produce paired `barge_in_received` and `tts_cancel_sent` markers in clean interrupt fixture windows.
+- A service-backed Rust gateway smoke run has passed through frontend WebSocket, Parakeet/Silero STT, gateway turn commit, Pi RPC Brain, Qwen TTS worker, binary output PCM, and frontend interrupt cancellation.
+- The legacy audio baseline fixture now replays the same ignored utterance through the Parakeet/Silero STT service before sending `user_utterance` to the bridge.
+- A clean comparator run passed the default +50ms budget with `benchmarks/traces/legacy-bridge/campbell-2026-06-20T23-23-09-307Z.jsonl` and `benchmarks/traces/rust-gateway/569b58ad-d621-431b-80e5-cc5a8ec6a718.jsonl`: `stt_final` -260ms, `brain_first_token` -223ms, `tts_audio_start` -266ms, `frontend_audio_play_scheduled` -273ms, and `barge_in_cancel` 0ms.
 
 To run fixture commands and then compare in one invocation:
 
