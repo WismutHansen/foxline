@@ -1,0 +1,5 @@
+{
+  "character": "campbell",
+  "utterance": "Colonel, confirm the codec latency benchmark path is active.",
+  "timeoutMs": 60000
+}

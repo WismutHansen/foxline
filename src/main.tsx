@@ -282,6 +282,9 @@ function useCodecDemo() {
           setTranscript((t) => [...t, { speaker: 'System', text: status, at: now() }]);
         }
       });
+      stt.current.onAudioFrame((data) => {
+        bridge.current?.trace('stt_audio_frame_sent', data);
+      });
       stt.current.onWord((word) => {
         setLiveCaption((t) => `${t}${t ? ' ' : ''}${word}`);
         bridge.current?.trace('stt_word', { word });

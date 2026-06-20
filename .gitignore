@@ -1,5 +1,6 @@
 pi-session-exports/
 sessions/
+benchmarks/traces/
 .old/
 # ---- ignr (detected: macos) @ 2026-05-30 ----
 node_modules/

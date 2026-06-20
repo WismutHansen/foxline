@@ -15,6 +15,7 @@ export class StreamingSttService {
   private onErrorCb?: (error: string) => void;
   private onLevelCb?: (level: number) => void;
   private onStatusCb?: (status: string) => void;
+  private onAudioFrameCb?: (data: { chunksSent: number; samples: number; level: number; mode: string }) => void;
   private chunksSent = 0;
   private manualMode = false;
   private pendingSamples: number[] = [];
@@ -163,6 +164,7 @@ export class StreamingSttService {
       this.ws.send(out.buffer);
       this.chunksSent++;
       const mode = this.manualMode ? 'PTT' : 'live';
+      this.onAudioFrameCb?.({ chunksSent: this.chunksSent, samples: out.length, level, mode });
       if (this.chunksSent === 1 || this.chunksSent % 20 === 0 || level > 0.08) this.onStatusCb?.(`${mode} ${this.label} stream: ${this.chunksSent} chunks level=${level.toFixed(2)}`);
     };
     this.source.connect(this.worklet);
@@ -219,4 +221,5 @@ export class StreamingSttService {
   onError(cb: (error: string) => void) { this.onErrorCb = cb; }
   onLevel(cb: (level: number) => void) { this.onLevelCb = cb; }
   onStatus(cb: (status: string) => void) { this.onStatusCb = cb; }
+  onAudioFrame(cb: (data: { chunksSent: number; samples: number; level: number; mode: string }) => void) { this.onAudioFrameCb = cb; }
 }

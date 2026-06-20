@@ -38,6 +38,9 @@ gateway-check:
 gateway-test:
     cargo test -p foxline-voice-gateway
 
+benchmark-legacy-bridge *args:
+    bun run benchmarks/run-legacy-bridge-fixture.ts {{args}}
+
 preview:
     bun run preview
 

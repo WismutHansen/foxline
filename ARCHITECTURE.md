@@ -41,6 +41,8 @@ The gateway frontend transport is WebSocket:
 
 Trace events use names comparable to the legacy bridge path, including `mic_frame_received`, `stt_partial`, `stt_final`, `brain_request_start`, `brain_first_token`, `tts_request_start`, `tts_audio_start`, `frontend_audio_play_scheduled`, `barge_in_received`, and `tts_cancel_sent`.
 
+Legacy bridge benchmark traces are mirrored under `benchmarks/traces/legacy-bridge/` and can be driven with `just benchmark-legacy-bridge`. See `docs/benchmarks.md`.
+
 ## Turn management
 
 The Rust gateway owns authoritative turn state. Frontend VAD and noise-gate messages are accepted as hints, but they do not commit a user turn by themselves. STT/VAD evidence frames drive `turn.user_started`, `turn.user_committed`, and `turn.interrupted` frames inside the canonical pipeline.

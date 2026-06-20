@@ -49,15 +49,33 @@ const sessionStamp = new Date().toISOString().replace(/[:.]/g, '-');
 const sessionDir = process.env.CODEC_SESSION_DIR || `${repo}/sessions/codec-${character}-${sessionStamp}`;
 mkdirSync(sessionDir, { recursive: true });
 const traceFile = process.env.CODEC_TRACE_FILE || `${sessionDir}/trace.jsonl`;
+const legacyBenchmarkTraceDir = process.env.CODEC_LEGACY_BENCHMARK_TRACE_DIR || `${repo}/benchmarks/traces/legacy-bridge`;
+mkdirSync(legacyBenchmarkTraceDir, { recursive: true });
+const legacyBenchmarkTraceFile = process.env.CODEC_LEGACY_BENCHMARK_TRACE_FILE || `${legacyBenchmarkTraceDir}/${character}-${sessionStamp}.jsonl`;
 const trajectoryFile = process.env.CODEC_TRAJECTORY_FILE || `${sessionDir}/trajectory.jsonl`;
 function writeJsonl(path: string, record: Record<string, unknown>, label: string) {
   try { appendFileSync(path, `${JSON.stringify(record)}\n`); } catch (e) { console.error(`[${label}] write failed`, e); }
 }
 function trace(event: string, data: Record<string, unknown> = {}) {
-  writeJsonl(traceFile, { ts: new Date().toISOString(), t_ms: Date.now(), event, ...data }, 'trace');
+  const record = { ts: new Date().toISOString(), t_ms: Date.now(), event, ...data };
+  writeJsonl(traceFile, record, 'trace');
+  writeJsonl(legacyBenchmarkTraceFile, record, 'legacy-benchmark-trace');
+  for (const alias of benchmarkEventAliases(event, data)) {
+    writeJsonl(legacyBenchmarkTraceFile, { ...record, event: alias.event, aliasOf: event, ...alias.data }, 'legacy-benchmark-trace');
+  }
 }
 function trajectory(event: string, data: Record<string, unknown> = {}) {
   writeJsonl(trajectoryFile, { ts: new Date().toISOString(), t_ms: Date.now(), event, ...data }, 'trajectory');
+}
+
+function benchmarkEventAliases(event: string, data: Record<string, unknown>) {
+  const aliases: Array<{ event: string; data?: Record<string, unknown> }> = [];
+  if (event === 'tts_cancel') aliases.push({ event: 'tts_cancel_sent', data });
+  if (event === 'client_audio_pcm_received' || event === 'client_audio_chunk_received') aliases.push({ event: 'frontend_audio_received', data });
+  if (event === 'client_pcm_scheduled' || event === 'client_wav_play_start') aliases.push({ event: 'frontend_audio_play_scheduled', data });
+  if (event === 'client_stt_word') aliases.push({ event: 'stt_partial', data });
+  if (event === 'client_stt_audio_frame_sent') aliases.push({ event: 'mic_frame_received', data });
+  return aliases;
 }
 
 function buildPiArgs() {
@@ -582,6 +600,7 @@ class PiRpc implements Brain {
   private activeTools = new Set<string>();
   private slowFillerTimer?: ReturnType<typeof setTimeout>;
   private streamedAssistantText = '';
+  private sawFirstTokenThisTurn = false;
   private inAngleTag = false;
   private sawInternalTagsThisTurn = false;
   private fillerStartPlayedThisTurn = false;
@@ -638,6 +657,7 @@ class PiRpc implements Brain {
     this.streamedAssistantText = '';
     this.inAngleTag = false;
     this.sawInternalTagsThisTurn = false;
+    this.sawFirstTokenThisTurn = false;
     qwenTtsWorker?.cancel('pi_prompt');
     broadcast({ type: 'audio_reset', reason: 'pi_prompt' });
     this.activeTools.clear();
@@ -647,6 +667,7 @@ class PiRpc implements Brain {
     broadcast({ type: 'turn_started', turnId: this.currentTurnId, character });
     broadcast({ type: 'phase', phase: 'thinking' });
     const message = `Snake: ${text}`;
+    trace('brain_request_start', { turnId: this.currentTurnId, textChars: text.length });
     this.send({ type: 'prompt', message, streamingBehavior: 'followUp' });
   }
 
@@ -658,6 +679,7 @@ class PiRpc implements Brain {
     this.streamedAssistantText = '';
     this.inAngleTag = false;
     this.sawInternalTagsThisTurn = false;
+    this.sawFirstTokenThisTurn = false;
     qwenTtsWorker?.cancel('pi_abort');
     broadcast({ type: 'audio_reset', reason: 'pi_abort' });
     this.activeTools.clear();
@@ -674,6 +696,7 @@ class PiRpc implements Brain {
     this.streamedAssistantText = '';
     this.inAngleTag = false;
     this.sawInternalTagsThisTurn = false;
+    this.sawFirstTokenThisTurn = false;
     qwenTtsWorker?.cancel('pi_new_session');
     broadcast({ type: 'audio_reset', reason: 'pi_new_session' });
     this.activeTools.clear();
@@ -775,6 +798,10 @@ class PiRpc implements Brain {
         spacedDelta = spacedDelta.replace(/^\s*(?:thought|analysis|reasoning)\b\s*[:\-]?\s*/i, '');
       }
       if (!spacedDelta.trim()) return;
+      if (!this.sawFirstTokenThisTurn) {
+        this.sawFirstTokenThisTurn = true;
+        trace('brain_first_token', { turnId: this.currentTurnId });
+      }
       this.streamedAssistantText += spacedDelta;
       broadcast({ type: 'assistant_delta', turnId: this.currentTurnId, delta: spacedDelta });
       for (const sentence of this.sentenceBuffer.push(spacedDelta)) this.enqueueTts(sentence);
@@ -882,8 +909,14 @@ Bun.serve({
       const msg = JSON.parse(String(data)) as ClientMsg;
       console.log('[bridge] client message', msg.type, 'text' in msg ? msg.text : '');
       if (msg.type === 'client_trace') { trace(`client_${msg.event}`, msg.data || {}); return; }
-      if (msg.type === 'user_utterance') brain.prompt(msg.text);
-      if (msg.type === 'interrupt') brain.abort();
+      if (msg.type === 'user_utterance') {
+        trace('stt_final', { text: msg.text, source: 'frontend_user_utterance' });
+        brain.prompt(msg.text);
+      }
+      if (msg.type === 'interrupt') {
+        trace('barge_in_received', { source: 'frontend_interrupt' });
+        brain.abort();
+      }
       if (msg.type === 'new_session') brain.newSession();
       if (msg.type === 'switch_character') {
         try { switchCharacter(msg.character); }
@@ -894,5 +927,5 @@ Bun.serve({
 });
 
 console.log(`[bridge] listening ws://127.0.0.1:${port} cwd=${characterCwd} brain=${brain.info()} session=${sessionDir} trace=${traceFile} trajectory=${trajectoryFile}`);
-trace('bridge_start', { port, character, brain: brain.info(), sessionDir, traceFile, trajectoryFile });
+trace('bridge_start', { port, character, brain: brain.info(), sessionDir, traceFile, trajectoryFile, legacyBenchmarkTraceFile });
 trajectory('session_start', { port, character, brain: brain.info(), sessionDir, traceFile, trajectoryFile, characterInstructions: loadCharacterInstructions() });
