@@ -6,5 +6,6 @@ pub mod loadout;
 pub mod pipeline;
 pub mod protocol;
 pub mod trace;
+pub mod tts;
 pub mod turn;
 pub mod ws;

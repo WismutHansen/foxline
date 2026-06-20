@@ -104,6 +104,17 @@ The adapter maps Pi RPC JSONL events into canonical Brain frames:
 
 Warm Brain lifecycle supports prewarm, idle shutdown, restart, and full shutdown. Live prompt-to-TTS routing is completed in the STT/TTS/frontend wiring tasks.
 
+## TTS adapter
+
+The Rust gateway exposes TTS through an adapter trait. The first backend is `qwen3-worker`, which preserves the current `services/qwen3_tts_worker.py` binary protocol:
+
+- input `speak`, `cancel`, and `shutdown` frames use the existing 9-byte `<type,u32 request_id,u32 payload_len>` header.
+- worker `audio_start`, `audio_chunk`, `audio_done`, and `error` frames map to canonical TTS frames.
+- PCM chunks also emit canonical binary audio frames for frontend transport.
+- request start, first audio, and cancel events use trace names comparable to the legacy bridge.
+
+Reserved backend names are `rust-mlx`, `rust-candle`, `cpp-ggml`, `elevenlabs`, and `openai`; they are explicit future adapter slots, not active Brain paths.
+
 ## Frontend clients
 
 Foxline Codec UI, KITT, oqto, and future clients should all connect through the same gateway WebSocket protocol. Client-specific visuals stay in the client. The gateway only emits semantic events and Avatar Actions, and the client maps those to its own presentation.
