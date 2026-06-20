@@ -1,5 +1,6 @@
 pub mod config;
 pub mod frame;
+pub mod loadout;
 pub mod pipeline;
 pub mod protocol;
 pub mod trace;

@@ -35,6 +35,7 @@ pub struct GatewayConfig {
     pub brain: BrainConfig,
     pub frontend: FrontendConfig,
     pub turn: TurnStrategyConfig,
+    pub loadouts: LoadoutConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -61,6 +62,13 @@ pub struct TurnStrategyConfig {
     pub barge_in_confirmation_window_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct LoadoutConfig {
+    pub default_name: String,
+    pub bundled_extensions_dir: PathBuf,
+}
+
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
@@ -71,6 +79,7 @@ impl Default for GatewayConfig {
             brain: BrainConfig::default(),
             frontend: FrontendConfig::default(),
             turn: TurnStrategyConfig::default(),
+            loadouts: LoadoutConfig::default(),
         }
     }
 }
@@ -101,6 +110,15 @@ impl Default for TurnStrategyConfig {
             min_speech_duration_ms: 180,
             max_utterance_duration_ms: 30_000,
             barge_in_confirmation_window_ms: 450,
+        }
+    }
+}
+
+impl Default for LoadoutConfig {
+    fn default() -> Self {
+        Self {
+            default_name: "default".to_string(),
+            bundled_extensions_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions"),
         }
     }
 }
@@ -194,5 +212,8 @@ silence_timeout_ms = 650
 min_speech_duration_ms = 180
 max_utterance_duration_ms = 30000
 barge_in_confirmation_window_ms = 450
+
+[loadouts]
+default_name = "default"
 "#
 }

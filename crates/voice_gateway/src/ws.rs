@@ -13,6 +13,7 @@ use crate::{
         AudioFrame, Frame, FrameEnvelope, InterruptReason, LifecycleFrame, SessionId, TurnFrame,
         VadFrame,
     },
+    loadout::LoadoutResolver,
     pipeline::{default_pipeline, LinearPipeline},
     protocol::{ClientControl, ServerEvent},
     trace::{
@@ -77,7 +78,11 @@ async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Res
                         );
                         let _ = pipeline.process(frame).await?;
                     }
-                    ClientControl::StartSession { .. } => {
+                    ClientControl::StartSession {
+                        agent,
+                        workspace,
+                        loadout,
+                    } => {
                         if config.frontend.require_capability_declaration && !capabilities_declared
                         {
                             send_error(
@@ -88,6 +93,29 @@ async fn handle_connection(stream: TcpStream, config: Arc<GatewayConfig>) -> Res
                             .await?;
                             continue;
                         }
+                        let resolver = LoadoutResolver::new(config.loadouts.clone());
+                        let resolved = match resolver.resolve(&workspace, loadout.as_deref()) {
+                            Ok(resolved) => resolved,
+                            Err(err) => {
+                                send_error(&mut ws, "loadout_resolution_failed", &err.to_string())
+                                    .await?;
+                                continue;
+                            }
+                        };
+                        trace.event(
+                            "loadout_resolved",
+                            json!({
+                                "agent": agent,
+                                "workspace": workspace,
+                                "loadout": resolved.name,
+                                "source": resolved.source.as_ref().map(|path| path.display().to_string()),
+                                "extensions": resolved.extension_paths.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
+                                "stt": resolved.loadout.adapters.stt,
+                                "tts": resolved.loadout.adapters.tts,
+                                "prewarm": resolved.loadout.lifecycle.prewarm,
+                                "keep_warm_ms": resolved.loadout.lifecycle.keep_warm_ms,
+                            }),
+                        )?;
                         session_started = true;
                         let frame = FrameEnvelope::new(
                             session_id.clone(),

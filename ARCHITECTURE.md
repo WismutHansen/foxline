@@ -64,6 +64,12 @@ Generate the JSON schema with:
 just gateway --print-config-schema
 ```
 
+## `.foxline` loadouts
+
+Project-local voice configuration lives under `.foxline/`; Pi-owned defaults remain under `.pi/`. The gateway resolves loadouts from `.foxline/loadouts/<name>.toml` or `.foxline/loadout.toml` for the default loadout, then resolves voice-only extensions from bundled `builtin:` references or project-local `.foxline/extensions/` paths.
+
+See `docs/foxline-loadouts.md` for the current schema.
+
 ## Why worker processes instead of HTTP services
 
 - Lower latency: PCM can stream as soon as the worker emits it.
