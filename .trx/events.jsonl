@@ -188,3 +188,6 @@
 {"id":"evt_jxptjc65","issue_id":"fxl-7myk","action":"created","timestamp":"2026-06-21T07:54:18.266187Z"}
 {"id":"evt_z4tbxg15","issue_id":"fxl-7myk","action":"updated","timestamp":"2026-06-21T07:54:26.702696Z","changes":[{"field":"status","from":"open","to":"in_progress"}]}
 {"id":"evt_pkyzbrps","issue_id":"fxl-7myk","action":"closed","timestamp":"2026-06-21T07:54:32.319428Z","note":"Done: re-cropped Avery Relay and Rowan Vale from larger generated masters with more margin, downscaled nearest-neighbor to exact 52x89, and remapped the portrait palette to the green tint sampled from an existing Codec avatar. Proof: visual inspection completed; git diff --check passes; sips confirms both portraits are 52x89."}
+{"id":"evt_5b7kzcm2","issue_id":"fxl-grcj","action":"created","timestamp":"2026-06-21T07:58:11.828266Z"}
+{"id":"evt_yb1hk2t2","issue_id":"fxl-grcj","action":"updated","timestamp":"2026-06-21T07:58:19.280904Z","changes":[{"field":"status","from":"open","to":"in_progress"}]}
+{"id":"evt_t02fbdef","issue_id":"fxl-grcj","action":"closed","timestamp":"2026-06-21T07:58:19.302299Z","note":"Done: regenerated Avery Relay and Rowan Vale portraits from large masters with exact 52:89 source-ratio crops before nearest-neighbor resize, avoiding horizontal squash. Proof: visual inspection completed; git diff --check passes; sips confirms both outputs are 52x89."}
