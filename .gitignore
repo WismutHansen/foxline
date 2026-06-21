@@ -16,6 +16,7 @@ dist/
 # Generated/local game assets from user-owned discs or PC installs
 sources/
 assets/generated/
+personas/_voice-candidates/
 agents/*/assets/avatar/
 agents/*/assets/reference_audio/
 agents/*/assets/filler/

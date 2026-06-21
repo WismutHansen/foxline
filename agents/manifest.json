@@ -1,17 +1,17 @@
 {
   "characters": [
     {
-      "id": "avery-relay",
-      "displayName": "Avery Relay",
-      "speakerName": "Avery",
+      "id": "alex-grant",
+      "displayName": "Alex Grant",
+      "speakerName": "Alex",
       "frequency": "140.42",
       "avatar": "portrait",
       "enabled": true
     },
     {
-      "id": "rowan-vale",
-      "displayName": "Rowan Vale",
-      "speakerName": "Rowan",
+      "id": "mira-chen",
+      "displayName": "Mira Chen",
+      "speakerName": "Mira",
       "frequency": "141.09",
       "avatar": "portrait",
       "enabled": true

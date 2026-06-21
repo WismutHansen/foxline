@@ -1,20 +1,20 @@
-id = "rowan-vale"
-display_name = "Rowan Vale"
+id = "mira-chen"
+display_name = "Mira Chen"
 prompt_file = "SYSTEM.md"
 license = "CC0-1.0"
 
 [voice]
 adapter = "qwen3-worker"
 reference_audio_dir = "voice/reference_audio"
-reference_audio = "voice/reference_audio/rowan-vale-reference.wav"
-reference_text = "voice/reference_audio/rowan-vale-reference.wav.txt"
+reference_audio = "voice/reference_audio/mira-chen-reference.wav"
+reference_text = "voice/reference_audio/mira-chen-reference.wav.txt"
 description = "Measured systems analyst voice. Thoughtful, precise, technically fluent, with a composed delivery."
 generator = "koko"
-generator_style = "af_nova.6+bf_alice.4"
+generator_style = "af_nova.5+bf_alice.5"
 generator_language = "en-us"
-generator_speed = 0.9
+generator_speed = 1.3
 
 [frontend.codec]
-speaker_name = "Rowan"
+speaker_name = "Mira"
 frequency = "141.09"
 avatar = "codec/portrait.png"

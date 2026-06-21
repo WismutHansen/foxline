@@ -1,20 +1,20 @@
-id = "avery-relay"
-display_name = "Avery Relay"
+id = "alex-grant"
+display_name = "Alex Grant"
 prompt_file = "SYSTEM.md"
 license = "CC0-1.0"
 
 [voice]
 adapter = "qwen3-worker"
 reference_audio_dir = "voice/reference_audio"
-reference_audio = "voice/reference_audio/avery-relay-reference.wav"
-reference_text = "voice/reference_audio/avery-relay-reference.wav.txt"
+reference_audio = "voice/reference_audio/alex-grant-reference.wav"
+reference_text = "voice/reference_audio/alex-grant-reference.wav.txt"
 description = "Calm, steady field communications operator voice. Clear pacing, low urgency, concise radio phrasing."
 generator = "koko"
-generator_style = "am_onyx.7+bm_daniel.3"
+generator_style = "am_onyx.6+bm_daniel.4"
 generator_language = "en-us"
-generator_speed = 0.92
+generator_speed = 1.3
 
 [frontend.codec]
-speaker_name = "Avery"
+speaker_name = "Alex"
 frequency = "140.42"
 avatar = "codec/portrait.png"

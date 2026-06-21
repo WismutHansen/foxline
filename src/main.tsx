@@ -96,7 +96,7 @@ function buildAvatarFaceMap() {
 }
 
 const avatarFaceMap = buildAvatarFaceMap();
-const fallbackCharacter: CodecCharacter = 'avery-relay';
+const fallbackCharacter: CodecCharacter = 'alex-grant';
 const defaultSupportFace = avatarFaceMap.get(fallbackCharacter)?.values().next().value || { base: '', mouth1: '', mouth2: '' };
 const snake = avatarFaceMap.get('snake')?.get('snake_normal') || defaultSupportFace;
 
