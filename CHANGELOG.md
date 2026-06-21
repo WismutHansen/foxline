@@ -24,3 +24,4 @@
 - Proved a service-backed Rust gateway smoke path through frontend WebSocket, STT, turn commit, Pi RPC Brain, Qwen TTS, and binary frontend audio; full latency parity remains open for real legacy audio/STT and paired barge-in cancellation traces.
 - Added legacy audio/STT benchmark replay, Pi model/thinking/prompt loadout fields, and a Campbell voice loadout that prewarms Pi with the legacy baseline settings; the live comparator now passes the +50ms budget for STT final, Brain first token, TTS first audio, frontend audio scheduling, and barge-in cancel.
 - Updated the Codec UI Rust gateway client to default voice sessions to the selected agent workspace, matching the proven `agents/<agent>` Pi launch path.
+- Separated Rust gateway Agent identity from Persona voice/presentation identity so clients can switch voices or characters without changing the Pi-backed Brain workspace.

@@ -67,7 +67,7 @@ FOXLINE_GATEWAY_TRACE_DIR=benchmarks/traces/rust-gateway just gateway
 just benchmark-rust-gateway --audio-file=benchmarks/traces/local-fixtures/utterance.wav --wait-for-assistant --wait-for-audio
 ```
 
-The audio fixture streams the utterance as binary PCM frames, sends trailing silence to let STT close the turn, then waits for assistant deltas, `turn_completed`, binary output PCM, and trace discovery. Raw `.pcm`/`.s16le` input defaults to 24 kHz and can be overridden with `--raw-pcm-sample-rate=<hz>`.
+The audio fixture streams the utterance as binary PCM frames, sends trailing silence to let STT close the turn, then waits for assistant deltas, `turn_completed`, binary output PCM, and trace discovery. Raw `.pcm`/`.s16le` input defaults to 24 kHz and can be overridden with `--raw-pcm-sample-rate=<hz>`. Pass `--agent=<agent>` and `--persona=<persona>` to keep the Brain agent fixed while changing the TTS voice/persona.
 
 To exercise cancellation after the first output audio frame:
 

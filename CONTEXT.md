@@ -20,6 +20,8 @@ _Avoid_: Character, persona
 The presentational identity used for voice and UI, including display name, voice assets, and frontend-specific representation.
 _Avoid_: Agent
 
+Personas can change within a frontend session without changing the Pi-backed Agent. Agent switching changes the Brain/workspace/loadout identity; Persona switching changes voice/reference assets and presentation identity.
+
 **Avatar Action**:
 A semantic presentation request routed through the Voice Gateway to a frontend, such as changing expression, focus, or animation, without prescribing theme-specific visuals.
 _Avoid_: MGS animation, sprite command

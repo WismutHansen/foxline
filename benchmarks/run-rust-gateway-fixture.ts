@@ -17,6 +17,7 @@ const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as Fixture;
 const timeoutMs = Number(argValue('--timeout-ms') || fixture.timeoutMs || 60000);
 const pcmBytes = Number(argValue('--pcm-bytes') || 4096);
 const character = argValue('--agent') || fixture.character || 'campbell';
+const persona = argValue('--persona') || process.env.FOXLINE_GATEWAY_PERSONA || character;
 const workspace = argValue('--workspace') || process.env.FOXLINE_GATEWAY_WORKSPACE || `agents/${character}`;
 const audioFile = argValue('--audio-file');
 const rawPcmSampleRate = Number(argValue('--raw-pcm-sample-rate') || 24000);
@@ -42,6 +43,7 @@ if (process.argv.includes('--dry-run')) {
     url,
     fixture: fixturePath,
     character,
+    persona,
     workspace,
     loadout,
     traceDir,
@@ -85,7 +87,7 @@ ws.addEventListener('open', () => {
       avatar_actions: ['set_state', 'set_expression', 'focus', 'play_animation', 'clear'],
     },
   }));
-  ws.send(JSON.stringify({ type: 'start_session', agent: character, workspace, loadout }));
+  ws.send(JSON.stringify({ type: 'start_session', agent: character, persona, workspace, loadout }));
 });
 
 ws.addEventListener('message', (event) => {

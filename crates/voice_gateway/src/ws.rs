@@ -131,7 +131,9 @@ async fn handle_connection(
                         agent,
                         workspace,
                         loadout,
+                        persona,
                     } => {
+                        let persona = persona.unwrap_or_else(|| agent.clone());
                         if config.frontend.require_capability_declaration && !capabilities_declared
                         {
                             send_error(
@@ -190,7 +192,7 @@ async fn handle_connection(
                         };
                         let mut tts_adapter = match build_tts_adapter(
                             &resolved.loadout.adapters.tts,
-                            &agent,
+                            &persona,
                             &resolved.workspace,
                         ) {
                             Ok(adapter) => adapter,
@@ -207,6 +209,7 @@ async fn handle_connection(
                             "loadout_resolved",
                             json!({
                                 "agent": agent,
+                                "persona": persona.clone(),
                                 "workspace": workspace,
                                 "loadout": resolved.name,
                                 "source": resolved.source.as_ref().map(|path| path.display().to_string()),
@@ -234,6 +237,7 @@ async fn handle_connection(
                         stt = Some(stt_adapter);
                         tts = Some(tts_adapter);
                         live = LiveSessionState::new(session_id_text.clone());
+                        live.persona = Some(persona);
                         process_pipeline_outputs(
                             &mut ws,
                             &mut pipeline,
@@ -432,6 +436,7 @@ async fn handle_connection(
 
 struct LiveSessionState {
     turn_id: String,
+    persona: Option<String>,
     assistant_started: bool,
     saw_brain_first_token: bool,
     sentence_buffer: SentenceBuffer,
@@ -441,6 +446,7 @@ impl LiveSessionState {
     fn new(turn_id: String) -> Self {
         Self {
             turn_id,
+            persona: None,
             assistant_started: false,
             saw_brain_first_token: false,
             sentence_buffer: SentenceBuffer::default(),
@@ -623,7 +629,8 @@ async fn handle_runtime_frame(
                         ws,
                         &ServerEvent::TurnStarted {
                             turn_id: live.turn_id.clone(),
-                            character: None,
+                            character: live.persona.clone(),
+                            persona: live.persona.clone(),
                         },
                     )
                     .await?;
@@ -779,7 +786,7 @@ fn build_stt_adapter(name: &str) -> Result<Box<dyn SttAdapter>> {
 
 fn build_tts_adapter(
     name: &str,
-    agent: &str,
+    persona: &str,
     workspace: &std::path::Path,
 ) -> Result<Box<dyn TtsAdapter>> {
     crate::tts::ensure_supported_tts_backend(name)?;
@@ -787,7 +794,7 @@ fn build_tts_adapter(
     let worker = env::var("CODEC_TTS_WORKER_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| repo.join("services/qwen3_tts_worker.py"));
-    let reference = resolve_voice_reference(agent, workspace, &repo)?;
+    let reference = resolve_voice_reference(persona, workspace, &repo)?;
     let sample_rate = env::var("CODEC_TTS_WORKER_SAMPLE_RATE")
         .ok()
         .and_then(|value| value.parse::<u32>().ok())
@@ -838,7 +845,7 @@ struct VoiceReference {
 }
 
 fn resolve_voice_reference(
-    agent: &str,
+    persona: &str,
     workspace: &std::path::Path,
     repo: &std::path::Path,
 ) -> Result<VoiceReference> {
@@ -852,8 +859,10 @@ fn resolve_voice_reference(
         });
     }
     let candidates = [
-        workspace.join("agents").join(agent),
-        repo.join("agents").join(agent),
+        workspace.join(".foxline").join("personas").join(persona),
+        workspace.join("personas").join(persona),
+        workspace.join("agents").join(persona),
+        repo.join("agents").join(persona),
     ];
     for character_dir in candidates {
         for dir in [
@@ -886,7 +895,7 @@ fn resolve_voice_reference(
         }
     }
     anyhow::bail!(
-        "No TTS reference wav/transcript found for agent {agent}; set FOXLINE_TTS_REF_AUDIO and FOXLINE_TTS_REF_TEXT_FILE"
+        "No TTS reference wav/transcript found for persona {persona}; set FOXLINE_TTS_REF_AUDIO and FOXLINE_TTS_REF_TEXT_FILE"
     )
 }
 
@@ -944,7 +953,7 @@ mod tests {
     }
 
     #[test]
-    fn voice_reference_resolves_repo_agent_sidecars() {
+    fn voice_reference_resolves_repo_persona_sidecars() {
         let repo = tempdir().unwrap();
         let workspace = tempdir().unwrap();
         let ref_dir = repo.path().join("agents/campbell/assets/reference_audio");
@@ -956,5 +965,23 @@ mod tests {
 
         assert_eq!(reference.wav, ref_dir.join("voice.wav"));
         assert_eq!(reference.txt, ref_dir.join("voice.txt"));
+    }
+
+    #[test]
+    fn voice_reference_resolves_workspace_persona_sidecars() {
+        let repo = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let ref_dir = workspace
+            .path()
+            .join(".foxline/personas/radio-operator/assets/reference_audio");
+        fs::create_dir_all(&ref_dir).unwrap();
+        fs::write(ref_dir.join("operator.wav"), b"wav").unwrap();
+        fs::write(ref_dir.join("operator.wav.txt"), "reference transcript").unwrap();
+
+        let reference =
+            resolve_voice_reference("radio-operator", workspace.path(), repo.path()).unwrap();
+
+        assert_eq!(reference.wav, ref_dir.join("operator.wav"));
+        assert_eq!(reference.txt, ref_dir.join("operator.wav.txt"));
     }
 }

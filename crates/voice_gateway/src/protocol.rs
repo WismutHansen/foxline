@@ -13,6 +13,7 @@ pub enum ClientControl {
         agent: String,
         workspace: String,
         loadout: Option<String>,
+        persona: Option<String>,
     },
     EndSession,
     VadHint {
@@ -58,6 +59,7 @@ pub enum ServerEvent {
     TurnStarted {
         turn_id: String,
         character: Option<String>,
+        persona: Option<String>,
     },
     AssistantDelta {
         turn_id: String,

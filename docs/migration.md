@@ -63,6 +63,14 @@ The Rust gateway binds each Pi RPC Brain to:
 
 This identity controls warm Brain reuse. The gateway may prewarm a Brain when the loadout or global config requests it, can shut down idle Brains, can restart a Brain after failure, and must pass voice-only extensions with explicit `--extension` flags. The gateway must not call a model provider or LLM server directly.
 
+## Agent and Persona switching
+
+Gateway sessions distinguish the Pi-backed `agent` from the voice/UI `persona`.
+
+- Agent switching changes the Brain identity: workspace, `.pi`, `.foxline` loadout, tool policy, extensions, and warm Pi RPC process.
+- Persona switching keeps the same Brain identity and changes voice/reference assets plus frontend presentation identity.
+- `start_session` accepts an optional `persona`; when omitted, it defaults to the selected `agent` for compatibility with the original Codec UI flow.
+
 ## Future clients
 
 KITT, oqto, Tauri, and other clients should connect as frontend clients to the gateway WebSocket protocol. The gateway should stay theme-agnostic: clients own visuals, playback UX, and any mapping from semantic Avatar Actions to their presentation system.

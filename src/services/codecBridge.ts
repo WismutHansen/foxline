@@ -190,7 +190,7 @@ type GatewayServerEvent =
   | { type: 'session_started'; session_id: string }
   | { type: 'session_ended' }
   | { type: 'phase'; phase: CodecPhase }
-  | { type: 'turn_started'; turn_id: string; character?: string }
+  | { type: 'turn_started'; turn_id: string; character?: string; persona?: string }
   | { type: 'assistant_delta'; turn_id: string; delta: string }
   | { type: 'turn_completed'; turn_id: string }
   | { type: 'audio_reset'; reason?: string }
@@ -210,6 +210,7 @@ export class RustVoiceGatewayClient {
   private readonly agent = import.meta.env.VITE_FOXLINE_GATEWAY_AGENT || 'campbell';
   private readonly workspace = import.meta.env.VITE_FOXLINE_GATEWAY_WORKSPACE || `agents/${this.agent}`;
   private readonly loadout = import.meta.env.VITE_FOXLINE_GATEWAY_LOADOUT || 'default';
+  private persona = import.meta.env.VITE_FOXLINE_GATEWAY_PERSONA || this.agent;
 
   constructor(private url = import.meta.env.VITE_FOXLINE_GATEWAY_URL || 'ws://127.0.0.1:8780') {
     window.addEventListener('online', () => this.connect());
@@ -240,6 +241,7 @@ export class RustVoiceGatewayClient {
       ws.send(JSON.stringify({
         type: 'start_session',
         agent: this.agent,
+        persona: this.persona,
         workspace: this.workspace,
         loadout: this.loadout,
       }));
@@ -254,14 +256,14 @@ export class RustVoiceGatewayClient {
       const event = JSON.parse(e.data) as GatewayServerEvent;
       if (event.type === 'session_started') {
         this.sessionId = event.session_id;
-        this.emit({ type: 'ready', character: this.agent, characters: [] });
-        this.emit({ type: 'session', sessionId: event.session_id, sessionName: `gateway:${this.agent}` });
+        this.emit({ type: 'ready', character: this.persona, characters: [] });
+        this.emit({ type: 'session', sessionId: event.session_id, sessionName: `gateway:${this.agent}:${this.persona}` });
       } else if (event.type === 'session_ended') {
         this.emit({ type: 'phase', phase: 'idle' });
       } else if (event.type === 'phase') {
         this.emit({ type: 'phase', phase: event.phase });
       } else if (event.type === 'turn_started') {
-        this.emit({ type: 'turn_started', turnId: event.turn_id, character: event.character });
+        this.emit({ type: 'turn_started', turnId: event.turn_id, character: event.persona || event.character });
       } else if (event.type === 'assistant_delta') {
         this.emit({ type: 'assistant_delta', turnId: event.turn_id, delta: event.delta });
       } else if (event.type === 'turn_completed') {
@@ -300,9 +302,21 @@ export class RustVoiceGatewayClient {
     return true;
   }
   interrupt() { this.ws?.send(JSON.stringify({ type: 'interrupt' })); }
-  newSession() { this.ws?.send(JSON.stringify({ type: 'end_session' })); this.ws?.close(); this.ws = undefined; this.connect(); }
-  switchCharacter(_character: string) {}
+  newSession() { this.restartSession(); }
+  switchPersona(persona: string) {
+    this.persona = persona;
+    this.emit({ type: 'character_switched', character: persona, characters: [] });
+    this.restartSession();
+  }
+  switchCharacter(character: string) { this.switchPersona(character); }
   trace(_event: string, _data?: Record<string, unknown>) {}
+
+  private restartSession() {
+    this.ws?.send(JSON.stringify({ type: 'end_session' }));
+    this.ws?.close();
+    this.ws = undefined;
+    this.connect();
+  }
 }
 
 function uint8ToBase64(bytes: Uint8Array) {

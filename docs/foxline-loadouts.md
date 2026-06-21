@@ -11,6 +11,10 @@ The Rust Voice Gateway owns `.foxline/` voice-session configuration. Pi-specific
     loadouts/
       default.toml
       field.toml
+    personas/
+      radio-operator/
+        assets/
+          reference_audio/
     extensions/
       project-tools/
 ```
@@ -51,6 +55,19 @@ allowed_pi = ["read", "write"]
 `required_frontend` names must be advertised by the connected frontend or session startup fails. `optional_frontend` names are enabled only when advertised. `allowed_pi` is passed to Pi as the tool allowlist for the Brain process.
 
 `model`, `thinking`, and prompt fields are optional Pi launch settings for voice loadouts. `append_system_prompt` passes inline text to Pi with `--append-system-prompt`; `append_system_prompt_file` reads a workspace-relative file and passes its contents with `--append-system-prompt`.
+
+## Persona voice references
+
+`start_session` takes an `agent` for the Pi-backed Brain and an optional `persona` for voice/presentation. When `persona` is omitted, it defaults to `agent`.
+
+TTS reference lookup for a persona checks:
+
+1. `<workspace>/.foxline/personas/<persona>/assets/reference_audio`
+2. `<workspace>/personas/<persona>/assets/reference_audio`
+3. `<workspace>/agents/<persona>/assets/reference_audio`
+4. `<repo>/agents/<persona>/assets/reference_audio`
+
+This lets a general UI keep one Agent/Brain active while changing voice or presentation persona.
 
 ## Extension references
 
