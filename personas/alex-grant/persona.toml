@@ -6,12 +6,45 @@ license = "CC0-1.0"
 [voice]
 adapter = "qwen3-worker"
 reference_audio_dir = "voice/reference_audio"
-reference_audio = "voice/reference_audio/alex-grant-reference.wav"
-reference_text = "voice/reference_audio/alex-grant-reference.wav.txt"
+reference_audio = "voice/reference_audio/alex-grant-a_onyx-daniel.wav"
+reference_text = "voice/reference_audio/reference.txt"
 description = "Calm, steady field communications operator voice. Clear pacing, low urgency, concise radio phrasing."
 generator = "koko"
 generator_style = "am_onyx.6+bm_daniel.4"
 generator_language = "en-us"
+generator_speed = 1.3
+
+[[voice.variants]]
+id = "onyx-daniel"
+label = "Onyx Daniel"
+reference_audio = "voice/reference_audio/alex-grant-a_onyx-daniel.wav"
+reference_text = "voice/reference_audio/reference.txt"
+generator_style = "am_onyx.6+bm_daniel.4"
+generator_speed = 1.3
+default = true
+
+[[voice.variants]]
+id = "michael-lewis"
+label = "Michael Lewis"
+reference_audio = "voice/reference_audio/alex-grant-b_michael-lewis.wav"
+reference_text = "voice/reference_audio/reference.txt"
+generator_style = "am_michael.6+bm_lewis.4"
+generator_speed = 1.3
+
+[[voice.variants]]
+id = "eric-fable"
+label = "Eric Fable"
+reference_audio = "voice/reference_audio/alex-grant-c_eric-fable.wav"
+reference_text = "voice/reference_audio/reference.txt"
+generator_style = "am_eric.5+bm_fable.5"
+generator_speed = 1.3
+
+[[voice.variants]]
+id = "liam-onyx"
+label = "Liam Onyx"
+reference_audio = "voice/reference_audio/alex-grant-d_liam-onyx.wav"
+reference_text = "voice/reference_audio/reference.txt"
+generator_style = "am_liam.6+am_onyx.4"
 generator_speed = 1.3
 
 [frontend.codec]

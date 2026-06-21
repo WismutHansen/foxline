@@ -76,11 +76,22 @@ prompt_file = "SYSTEM.md"
 [voice]
 adapter = "qwen3-worker"
 reference_audio_dir = "voice/reference_audio"
+reference_audio = "voice/reference_audio/radio-operator-a.wav"
+reference_text = "voice/reference_audio/reference.txt"
+
+[[voice.variants]]
+id = "operator-a"
+label = "Operator A"
+reference_audio = "voice/reference_audio/radio-operator-a.wav"
+reference_text = "voice/reference_audio/reference.txt"
+default = true
 
 [frontend.codec]
 config = "codec/persona.toml"
 portrait = "codec/portrait.png"
 ```
+
+`voice.reference_audio` and `voice.reference_text` define the default TTS reference used by the gateway. `voice.variants` can list additional shippable references for clients or installers that want to expose voice choices.
 
 Persona package lookup checks:
 

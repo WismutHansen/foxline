@@ -1,7 +1,12 @@
-use std::{env, path::PathBuf, sync::Arc};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
 use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
@@ -844,11 +849,18 @@ struct VoiceReference {
     txt: PathBuf,
 }
 
-fn resolve_voice_reference(
-    persona: &str,
-    workspace: &std::path::Path,
-    repo: &std::path::Path,
-) -> Result<VoiceReference> {
+#[derive(Debug, Deserialize)]
+struct PersonaManifest {
+    voice: Option<PersonaVoiceManifest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PersonaVoiceManifest {
+    reference_audio: Option<String>,
+    reference_text: Option<String>,
+}
+
+fn resolve_voice_reference(persona: &str, workspace: &Path, repo: &Path) -> Result<VoiceReference> {
     if let (Ok(wav), Ok(txt)) = (
         env::var("FOXLINE_TTS_REF_AUDIO").or_else(|_| env::var("CODEC_TTS_REF_AUDIO")),
         env::var("FOXLINE_TTS_REF_TEXT_FILE").or_else(|_| env::var("CODEC_TTS_REF_TEXT_FILE")),
@@ -866,6 +878,9 @@ fn resolve_voice_reference(
         repo.join("agents").join(persona),
     ];
     for character_dir in candidates {
+        if let Some(reference) = resolve_manifest_voice_reference(&character_dir) {
+            return Ok(reference);
+        }
         for dir in [
             character_dir.join("voice/reference_audio"),
             character_dir.join("assets/reference_audio"),
@@ -886,6 +901,10 @@ fn resolve_voice_reference(
                         .exists()
                         .then(|| path.with_extension("txt"))
                         .or_else(|| {
+                            let shared = dir.join("reference.txt");
+                            shared.exists().then_some(shared)
+                        })
+                        .or_else(|| {
                             let sidecar = PathBuf::from(format!("{}.txt", path.display()));
                             sidecar.exists().then_some(sidecar)
                         });
@@ -899,6 +918,31 @@ fn resolve_voice_reference(
     anyhow::bail!(
         "No TTS reference wav/transcript found for persona {persona}; set FOXLINE_TTS_REF_AUDIO and FOXLINE_TTS_REF_TEXT_FILE"
     )
+}
+
+fn resolve_manifest_voice_reference(persona_dir: &Path) -> Option<VoiceReference> {
+    let manifest_path = persona_dir.join("persona.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).ok()?;
+    let manifest: PersonaManifest = toml::from_str(&manifest).ok()?;
+    let voice = manifest.voice?;
+    let wav = voice.reference_audio?;
+    let wav = persona_dir.join(wav);
+    if !wav.exists() {
+        return None;
+    }
+    let txt = voice
+        .reference_text
+        .map(|path| persona_dir.join(path))
+        .filter(|path| path.exists())
+        .or_else(|| {
+            let path = wav.with_extension("txt");
+            path.exists().then_some(path)
+        })
+        .or_else(|| {
+            let path = PathBuf::from(format!("{}.txt", wav.display()));
+            path.exists().then_some(path)
+        })?;
+    Some(VoiceReference { wav, txt })
 }
 
 fn repo_root() -> PathBuf {
@@ -959,9 +1003,19 @@ mod tests {
         let repo = tempdir().unwrap();
         let workspace = tempdir().unwrap();
         let ref_dir = repo.path().join("personas/campbell/voice/reference_audio");
+        let persona_dir = repo.path().join("personas/campbell");
         fs::create_dir_all(&ref_dir).unwrap();
         fs::write(ref_dir.join("voice.wav"), b"wav").unwrap();
         fs::write(ref_dir.join("voice.txt"), "reference transcript").unwrap();
+        fs::write(
+            persona_dir.join("persona.toml"),
+            r#"
+[voice]
+reference_audio = "voice/reference_audio/voice.wav"
+reference_text = "voice/reference_audio/voice.txt"
+"#,
+        )
+        .unwrap();
 
         let reference = resolve_voice_reference("campbell", workspace.path(), repo.path()).unwrap();
 
@@ -985,6 +1039,36 @@ mod tests {
 
         assert_eq!(reference.wav, ref_dir.join("operator.wav"));
         assert_eq!(reference.txt, ref_dir.join("operator.wav.txt"));
+    }
+
+    #[test]
+    fn voice_reference_uses_manifest_default_before_directory_order() {
+        let repo = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let persona_dir = repo.path().join("personas/mira-chen");
+        let ref_dir = persona_dir.join("voice/reference_audio");
+        fs::create_dir_all(&ref_dir).unwrap();
+        fs::write(ref_dir.join("mira-chen-a_nova-alice.wav"), b"wav").unwrap();
+        fs::write(ref_dir.join("mira-chen-c_sarah-isabella.wav"), b"wav").unwrap();
+        fs::write(ref_dir.join("reference.txt"), "reference transcript").unwrap();
+        fs::write(
+            persona_dir.join("persona.toml"),
+            r#"
+[voice]
+reference_audio = "voice/reference_audio/mira-chen-c_sarah-isabella.wav"
+reference_text = "voice/reference_audio/reference.txt"
+"#,
+        )
+        .unwrap();
+
+        let reference =
+            resolve_voice_reference("mira-chen", workspace.path(), repo.path()).unwrap();
+
+        assert_eq!(
+            reference.wav,
+            ref_dir.join("mira-chen-c_sarah-isabella.wav")
+        );
+        assert_eq!(reference.txt, ref_dir.join("reference.txt"));
     }
 
     #[test]

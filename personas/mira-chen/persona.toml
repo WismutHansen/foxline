@@ -6,12 +6,45 @@ license = "CC0-1.0"
 [voice]
 adapter = "qwen3-worker"
 reference_audio_dir = "voice/reference_audio"
-reference_audio = "voice/reference_audio/mira-chen-reference.wav"
-reference_text = "voice/reference_audio/mira-chen-reference.wav.txt"
+reference_audio = "voice/reference_audio/mira-chen-c_sarah-isabella.wav"
+reference_text = "voice/reference_audio/reference.txt"
 description = "Measured systems analyst voice. Thoughtful, precise, technically fluent, with a composed delivery."
 generator = "koko"
-generator_style = "af_nova.5+bf_alice.5"
+generator_style = "af_sarah.5+bf_isabella.5"
 generator_language = "en-us"
+generator_speed = 1.3
+
+[[voice.variants]]
+id = "nova-alice"
+label = "Nova Alice"
+reference_audio = "voice/reference_audio/mira-chen-a_nova-alice.wav"
+reference_text = "voice/reference_audio/reference.txt"
+generator_style = "af_nova.5+bf_alice.5"
+generator_speed = 1.3
+
+[[voice.variants]]
+id = "kore-emma"
+label = "Kore Emma"
+reference_audio = "voice/reference_audio/mira-chen-b_kore-emma.wav"
+reference_text = "voice/reference_audio/reference.txt"
+generator_style = "af_kore.6+bf_emma.4"
+generator_speed = 1.3
+
+[[voice.variants]]
+id = "sarah-isabella"
+label = "Sarah Isabella"
+reference_audio = "voice/reference_audio/mira-chen-c_sarah-isabella.wav"
+reference_text = "voice/reference_audio/reference.txt"
+generator_style = "af_sarah.5+bf_isabella.5"
+generator_speed = 1.3
+default = true
+
+[[voice.variants]]
+id = "river-nicole"
+label = "River Nicole"
+reference_audio = "voice/reference_audio/mira-chen-d_river-nicole.wav"
+reference_text = "voice/reference_audio/reference.txt"
+generator_style = "af_river.6+af_nicole.4"
 generator_speed = 1.3
 
 [frontend.codec]
