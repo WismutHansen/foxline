@@ -267,11 +267,12 @@ impl PiRpcBrain {
         let session_id = self.session_id.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
+            let mut mapper = RpcFrameMapper::default();
             while let Ok(Some(line)) = lines.next_line().await {
                 if line.trim().is_empty() {
                     continue;
                 }
-                match rpc_line_to_frames(&session_id, &line) {
+                match mapper.line_to_frames(&session_id, &line) {
                     Ok(frames) => {
                         for frame in frames {
                             if tx.send(frame).await.is_err() {
@@ -394,74 +395,120 @@ struct AssistantMessageEvent {
 
 pub fn rpc_line_to_frames(session_id: &SessionId, line: &str) -> Result<Vec<FrameEnvelope>> {
     let event: RpcEvent = serde_json::from_str(line)?;
-    Ok(rpc_event_to_frames(session_id, event))
+    Ok(RpcFrameMapper::default().event_to_frames(session_id, event))
 }
 
-fn rpc_event_to_frames(session_id: &SessionId, event: RpcEvent) -> Vec<FrameEnvelope> {
-    let mut frames = Vec::new();
-    match event.event_type.as_str() {
-        "message_update" => {
-            if let Some(assistant) = event.assistant_message_event {
-                match assistant.event_type.as_str() {
-                    "text_delta" => {
-                        if let Some(delta) = assistant.delta {
+#[derive(Default)]
+struct RpcFrameMapper {
+    assistant_content: String,
+}
+
+impl RpcFrameMapper {
+    fn line_to_frames(&mut self, session_id: &SessionId, line: &str) -> Result<Vec<FrameEnvelope>> {
+        let event: RpcEvent = serde_json::from_str(line)?;
+        Ok(self.event_to_frames(session_id, event))
+    }
+
+    fn event_to_frames(&mut self, session_id: &SessionId, event: RpcEvent) -> Vec<FrameEnvelope> {
+        let mut frames = Vec::new();
+        match event.event_type.as_str() {
+            "message_update" => {
+                if let Some(assistant) = event.assistant_message_event {
+                    match assistant.event_type.as_str() {
+                        "text_delta" => {
+                            if let Some(delta) = assistant.delta {
+                                self.assistant_content.push_str(&delta);
+                                frames.push(FrameEnvelope::new(
+                                    session_id.clone(),
+                                    Frame::Brain(BrainFrame::TextDelta { text: delta }),
+                                ));
+                            }
+                        }
+                        "done" => {
+                            self.assistant_content.clear();
                             frames.push(FrameEnvelope::new(
                                 session_id.clone(),
-                                Frame::Brain(BrainFrame::TextDelta { text: delta }),
+                                Frame::Brain(BrainFrame::Done),
                             ));
                         }
+                        _ => {}
                     }
-                    "done" => frames.push(FrameEnvelope::new(
-                        session_id.clone(),
-                        Frame::Brain(BrainFrame::Done),
-                    )),
-                    _ => {}
-                }
-                if let Some(content) = assistant.content {
-                    frames.push(FrameEnvelope::new(
-                        session_id.clone(),
-                        Frame::Brain(BrainFrame::TextDelta { text: content }),
-                    ));
+                    if let Some(content) = assistant.content {
+                        let delta = cumulative_suffix_delta(&self.assistant_content, &content);
+                        if !delta.is_empty() {
+                            frames.push(FrameEnvelope::new(
+                                session_id.clone(),
+                                Frame::Brain(BrainFrame::TextDelta {
+                                    text: delta.to_string(),
+                                }),
+                            ));
+                        }
+                        self.assistant_content = content;
+                    }
                 }
             }
-        }
-        "tool_execution_start" => frames.push(FrameEnvelope::new(
-            session_id.clone(),
-            Frame::Brain(BrainFrame::ToolCall {
-                name: event.tool_name.unwrap_or_else(|| "unknown".to_string()),
-                arguments: event.message.or(event.data).unwrap_or_else(|| json!({})),
-            }),
-        )),
-        "tool_execution_end" => frames.push(FrameEnvelope::new(
-            session_id.clone(),
-            Frame::Brain(BrainFrame::ToolResult {
-                call_id: event.tool_call_id.unwrap_or_default(),
-                result: event.data.unwrap_or_else(|| json!({})),
-            }),
-        )),
-        "response"
-            if event.command.as_deref() == Some("prompt") && event.success == Some(false) =>
-        {
-            frames.push(FrameEnvelope::new(
+            "tool_execution_start" => frames.push(FrameEnvelope::new(
+                session_id.clone(),
+                Frame::Brain(BrainFrame::ToolCall {
+                    name: event.tool_name.unwrap_or_else(|| "unknown".to_string()),
+                    arguments: event.message.or(event.data).unwrap_or_else(|| json!({})),
+                }),
+            )),
+            "tool_execution_end" => frames.push(FrameEnvelope::new(
+                session_id.clone(),
+                Frame::Brain(BrainFrame::ToolResult {
+                    call_id: event.tool_call_id.unwrap_or_default(),
+                    result: event.data.unwrap_or_else(|| json!({})),
+                }),
+            )),
+            "response"
+                if event.command.as_deref() == Some("prompt") && event.success == Some(false) =>
+            {
+                frames.push(FrameEnvelope::new(
+                    session_id.clone(),
+                    Frame::Brain(BrainFrame::Error {
+                        message: value_to_string(event.error, "Pi RPC prompt rejected"),
+                    }),
+                ));
+            }
+            "error" => frames.push(FrameEnvelope::new(
                 session_id.clone(),
                 Frame::Brain(BrainFrame::Error {
-                    message: value_to_string(event.error, "Pi RPC prompt rejected"),
+                    message: value_to_string(event.error.or(event.message), "Pi RPC error"),
                 }),
-            ));
+            )),
+            "agent_end" => frames.push(FrameEnvelope::new(
+                session_id.clone(),
+                Frame::Brain(BrainFrame::Done),
+            )),
+            _ => {}
         }
-        "error" => frames.push(FrameEnvelope::new(
-            session_id.clone(),
-            Frame::Brain(BrainFrame::Error {
-                message: value_to_string(event.error.or(event.message), "Pi RPC error"),
-            }),
-        )),
-        "agent_end" => frames.push(FrameEnvelope::new(
-            session_id.clone(),
-            Frame::Brain(BrainFrame::Done),
-        )),
-        _ => {}
+        frames
     }
-    frames
+}
+
+fn cumulative_suffix_delta<'a>(previous: &str, content: &'a str) -> &'a str {
+    if previous.is_empty() {
+        return content;
+    }
+    if content == previous {
+        return "";
+    }
+    let mut split = 0;
+    for ((prev_index, prev_ch), (content_index, content_ch)) in
+        previous.char_indices().zip(content.char_indices())
+    {
+        if prev_ch != content_ch {
+            break;
+        }
+        split = prev_index + prev_ch.len_utf8();
+        debug_assert_eq!(split, content_index + content_ch.len_utf8());
+    }
+    if split == 0 {
+        content
+    } else {
+        &content[split..]
+    }
 }
 
 fn resolve_workspace_path(workspace: &Path, path: &str) -> PathBuf {
@@ -518,7 +565,7 @@ mod tests {
         loadout::{ResolvedLoadout, VoiceLoadout},
     };
 
-    use super::{rpc_line_to_frames, BrainIdentity, PiLaunch};
+    use super::{rpc_line_to_frames, BrainIdentity, PiLaunch, RpcFrameMapper};
 
     fn resolved_loadout(workspace: PathBuf) -> ResolvedLoadout {
         let mut loadout = VoiceLoadout::default();
@@ -625,6 +672,47 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(done[0].frame, Frame::Brain(BrainFrame::Done)));
+    }
+
+    #[test]
+    fn maps_pi_rpc_cumulative_content_to_suffix_deltas() {
+        let session_id = SessionId::new();
+        let mut mapper = RpcFrameMapper::default();
+
+        let first = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Copy that."}}"#,
+            )
+            .unwrap();
+        let repeated_content = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":" Stay sharp.","content":"Copy that. Stay sharp."}}"#,
+            )
+            .unwrap();
+        assert_eq!(mapper.assistant_content, "Copy that. Stay sharp.");
+        let next_content = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","content":"Copy that. Stay sharp out there."}}"#,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            &first[0].frame,
+            Frame::Brain(BrainFrame::TextDelta { text }) if text == "Copy that."
+        ));
+        assert_eq!(repeated_content.len(), 1);
+        assert!(matches!(
+            &repeated_content[0].frame,
+            Frame::Brain(BrainFrame::TextDelta { text }) if text == " Stay sharp."
+        ));
+        assert_eq!(next_content.len(), 1);
+        match &next_content[0].frame {
+            Frame::Brain(BrainFrame::TextDelta { text }) => assert_eq!(text, " out there."),
+            frame => panic!("unexpected frame: {frame:?}"),
+        }
     }
 
     #[test]
