@@ -581,6 +581,28 @@ async fn handle_runtime_frame(
     let frames = process_pipeline_outputs(ws, pipeline, trace, avatar_router, frame).await?;
     for frame in frames {
         match frame.frame {
+            Frame::Stt(SttFrame::Partial { text, confidence }) => {
+                send_event(
+                    ws,
+                    &ServerEvent::UserTranscript {
+                        text,
+                        final_: false,
+                        confidence,
+                    },
+                )
+                .await?;
+            }
+            Frame::Stt(SttFrame::Final { text, confidence }) => {
+                send_event(
+                    ws,
+                    &ServerEvent::UserTranscript {
+                        text,
+                        final_: true,
+                        confidence,
+                    },
+                )
+                .await?;
+            }
             Frame::Stt(SttFrame::Error { message }) => {
                 send_error(ws, "stt_error", &message).await?;
             }

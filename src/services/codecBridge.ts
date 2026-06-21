@@ -6,6 +6,7 @@ export type BridgeEvent =
   | { type: 'character_switched'; character: string; characters?: CodecCharacterInfo[] }
   | { type: 'phase'; phase: CodecPhase }
   | { type: 'assistant_delta'; delta: string; turnId: string }
+  | { type: 'user_transcript'; text: string; final: boolean; confidence?: number }
   | { type: 'sentence'; text: string; turnId: string }
   | { type: 'audio_chunk'; chunk: string; text: string; index: number; sample_rate: number; turnId: string }
   | { type: 'audio_pcm'; chunk: string; text: string; index: number; sample_rate: number; turnId: string }
@@ -192,6 +193,7 @@ type GatewayServerEvent =
   | { type: 'phase'; phase: CodecPhase }
   | { type: 'turn_started'; turn_id: string; character?: string; persona?: string }
   | { type: 'assistant_delta'; turn_id: string; delta: string }
+  | { type: 'user_transcript'; text: string; final: boolean; confidence?: number }
   | { type: 'turn_completed'; turn_id: string }
   | { type: 'audio_reset'; reason?: string }
   | { type: 'error'; code: string; message: string }
@@ -266,6 +268,8 @@ export class RustVoiceGatewayClient {
         this.emit({ type: 'turn_started', turnId: event.turn_id, character: event.persona || event.character });
       } else if (event.type === 'assistant_delta') {
         this.emit({ type: 'assistant_delta', turnId: event.turn_id, delta: event.delta });
+      } else if (event.type === 'user_transcript') {
+        this.emit({ type: 'user_transcript', text: event.text, final: event.final, confidence: event.confidence });
       } else if (event.type === 'turn_completed') {
         this.emit({ type: 'turn_completed', turnId: event.turn_id });
       } else if (event.type === 'audio_reset') {

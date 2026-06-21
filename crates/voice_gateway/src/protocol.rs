@@ -65,6 +65,12 @@ pub enum ServerEvent {
         turn_id: String,
         delta: String,
     },
+    UserTranscript {
+        text: String,
+        #[serde(rename = "final")]
+        final_: bool,
+        confidence: Option<f32>,
+    },
     TurnCompleted {
         turn_id: String,
     },

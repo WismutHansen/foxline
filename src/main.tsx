@@ -223,6 +223,16 @@ function useCodecDemo() {
           return next;
         });
       }
+      if (event.type === 'user_transcript') {
+        const text = event.text.trim();
+        if (!text) return;
+        if (event.final) {
+          setLiveCaption('');
+          setTranscript((t) => [...t, { speaker: 'Snake', text, at: now() }]);
+        } else {
+          setLiveCaption(text);
+        }
+      }
       if (event.type === 'audio_chunk') {
         if (event.turnId !== activeTurnId.current) {
           bridge.current?.trace('audio_chunk_ignored_stale', { turnId: event.turnId, activeTurnId: activeTurnId.current, index: event.index });
