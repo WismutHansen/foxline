@@ -17,10 +17,10 @@ A Pi-backed working identity rooted in a workspace and Pi configuration, optiona
 _Avoid_: Character, persona
 
 **Persona**:
-The presentational identity used for voice and UI, including display name, voice assets, and frontend-specific representation.
+The presentational identity used for voice and UI, including display name, voice assets, Persona prompt fragments, and optional frontend-specific representation.
 _Avoid_: Agent
 
-Personas can change within a frontend session without changing the Pi-backed Agent. Agent switching changes the Brain/workspace/loadout identity; Persona switching changes voice/reference assets and presentation identity.
+Personas can change within a frontend session without changing the Pi-backed Agent. Agent switching changes the Brain/workspace/loadout identity; Persona switching changes voice/reference assets, Persona prompt fragments, and presentation identity. Persona packages can be installed centrally and overridden per workspace.
 
 **Avatar Action**:
 A semantic presentation request routed through the Voice Gateway to a frontend, such as changing expression, focus, or animation, without prescribing theme-specific visuals.
@@ -35,7 +35,7 @@ The `.pi/` directory inside an Agent workspace that contains Pi-specific configu
 _Avoid_: .agents for Pi-specific config
 
 **Voice Mode Loadout**:
-The agent-specific configuration used only for voice sessions, including allowed tools, extensions, skills, prompts, and voice interaction constraints.
+The agent-specific configuration used only for voice sessions, including allowed tools, extensions, skills, adapter choices, lifecycle policy, and voice interaction constraints.
 _Avoid_: Agent config, codec config
 
 **Frontend Tool**:
