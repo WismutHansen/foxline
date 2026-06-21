@@ -26,6 +26,7 @@ agents/*/assets/filler/
 *.chd
 *.ecm
 *.wav
+!personas/**/voice/reference_audio/*.wav
 *.xa
 *.str
 *.tim

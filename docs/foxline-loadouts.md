@@ -91,6 +91,8 @@ Persona package lookup checks:
 
 Workspace-local packages override centrally installed packages. This lets installed systems reuse personas across many Agent workspaces while allowing project-specific Persona overrides.
 
+The repo ships original demo Persona packages under `personas/` for users without game-disc assets. These packages may include generated Codec portraits and Koko/Kokoro-generated reference voices, but must not include copyrighted extracted runtime assets.
+
 For compatibility during migration, TTS reference lookup also accepts legacy sidecar directories:
 
 1. `<workspace>/personas/<persona>/assets/reference_audio`

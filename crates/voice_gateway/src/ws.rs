@@ -862,10 +862,12 @@ fn resolve_voice_reference(
         workspace.join(".foxline").join("personas").join(persona),
         workspace.join("personas").join(persona),
         workspace.join("agents").join(persona),
+        repo.join("personas").join(persona),
         repo.join("agents").join(persona),
     ];
     for character_dir in candidates {
         for dir in [
+            character_dir.join("voice/reference_audio"),
             character_dir.join("assets/reference_audio"),
             character_dir.join("assets"),
         ] {
@@ -956,7 +958,7 @@ mod tests {
     fn voice_reference_resolves_repo_persona_sidecars() {
         let repo = tempdir().unwrap();
         let workspace = tempdir().unwrap();
-        let ref_dir = repo.path().join("agents/campbell/assets/reference_audio");
+        let ref_dir = repo.path().join("personas/campbell/voice/reference_audio");
         fs::create_dir_all(&ref_dir).unwrap();
         fs::write(ref_dir.join("voice.wav"), b"wav").unwrap();
         fs::write(ref_dir.join("voice.txt"), "reference transcript").unwrap();
@@ -973,7 +975,7 @@ mod tests {
         let workspace = tempdir().unwrap();
         let ref_dir = workspace
             .path()
-            .join(".foxline/personas/radio-operator/assets/reference_audio");
+            .join(".foxline/personas/radio-operator/voice/reference_audio");
         fs::create_dir_all(&ref_dir).unwrap();
         fs::write(ref_dir.join("operator.wav"), b"wav").unwrap();
         fs::write(ref_dir.join("operator.wav.txt"), "reference transcript").unwrap();
@@ -983,5 +985,20 @@ mod tests {
 
         assert_eq!(reference.wav, ref_dir.join("operator.wav"));
         assert_eq!(reference.txt, ref_dir.join("operator.wav.txt"));
+    }
+
+    #[test]
+    fn voice_reference_keeps_legacy_repo_agent_fallback() {
+        let repo = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let ref_dir = repo.path().join("agents/campbell/assets/reference_audio");
+        fs::create_dir_all(&ref_dir).unwrap();
+        fs::write(ref_dir.join("voice.wav"), b"wav").unwrap();
+        fs::write(ref_dir.join("voice.txt"), "reference transcript").unwrap();
+
+        let reference = resolve_voice_reference("campbell", workspace.path(), repo.path()).unwrap();
+
+        assert_eq!(reference.wav, ref_dir.join("voice.wav"));
+        assert_eq!(reference.txt, ref_dir.join("voice.txt"));
     }
 }

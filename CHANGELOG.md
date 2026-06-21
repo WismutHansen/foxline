@@ -26,3 +26,4 @@
 - Updated the Codec UI Rust gateway client to default voice sessions to the selected agent workspace, matching the proven `agents/<agent>` Pi launch path.
 - Separated Rust gateway Agent identity from Persona voice/presentation identity so clients can switch voices or characters without changing the Pi-backed Brain workspace.
 - Documented Persona packages as self-contained directories with generic identity, prompt, voice, and frontend-specific config sections, including centrally installed packages and workspace overrides.
+- Added two shippable original demo Persona packages, Avery Relay and Rowan Vale, with generated Codec portraits and Koko/Kokoro reference voices for no-disc setups.

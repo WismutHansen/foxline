@@ -1,6 +1,22 @@
 {
   "characters": [
     {
+      "id": "avery-relay",
+      "displayName": "Avery Relay",
+      "speakerName": "Avery",
+      "frequency": "140.42",
+      "avatar": "portrait",
+      "enabled": true
+    },
+    {
+      "id": "rowan-vale",
+      "displayName": "Rowan Vale",
+      "speakerName": "Rowan",
+      "frequency": "141.09",
+      "avatar": "portrait",
+      "enabled": true
+    },
+    {
       "id": "campbell",
       "displayName": "Roy Campbell",
       "speakerName": "Colonel",
