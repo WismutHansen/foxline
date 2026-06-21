@@ -117,6 +117,25 @@ function supportFaceFor(characterId: string, characters: CodecCharacterInfo[]) {
 const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 type VoiceClient = CodecBridgeClient | RustVoiceGatewayClient;
 
+const ASSISTANT_DEDUPE_MIN_CHARS = 12;
+
+function suffixPrefixOverlap(left: string, right: string): number {
+  const max = Math.min(left.length, right.length);
+  for (let length = max; length >= ASSISTANT_DEDUPE_MIN_CHARS; length -= 1) {
+    if (left.endsWith(right.slice(0, length))) return length;
+  }
+  return 0;
+}
+
+function appendAssistantDelta(current: string, delta: string): string {
+  if (!delta) return current;
+  if (!current) return delta;
+  if (current.length >= ASSISTANT_DEDUPE_MIN_CHARS && delta.startsWith(current)) return delta;
+  if (delta.trim().length >= ASSISTANT_DEDUPE_MIN_CHARS && current.endsWith(delta)) return current;
+  const overlap = suffixPrefixOverlap(current, delta);
+  return current + delta.slice(overlap);
+}
+
 function faceFor(set: FaceSet, level: number, active: boolean, tick: number) {
   if (tick % 240 > 232 && set.eyes1) return set.eyes1;
   if (!active || level < 0.08) return set.base;
@@ -213,7 +232,9 @@ function useCodecDemo() {
         });
       }
       if (event.type === 'assistant_delta') {
-        assistantText.current += event.delta;
+        const nextAssistantText = appendAssistantDelta(assistantText.current, event.delta);
+        if (nextAssistantText === assistantText.current) return;
+        assistantText.current = nextAssistantText;
         setAssistantResponse(assistantText.current);
         setTranscript((t) => {
           const idx = assistantLineIndex.current;
