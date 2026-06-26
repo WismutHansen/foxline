@@ -3,8 +3,8 @@ import { createRoot } from 'react-dom/client';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './styles.css';
-import { MicrophonePcmStreamer, StreamingSttService } from './services/stt';
-import { CodecBridgeClient, RustVoiceGatewayClient, StreamingAudioPlayer, defaultWsUrl, type BridgeEvent, type CodecCharacterInfo, type CodecPhase } from './services/codecBridge';
+import { MicrophonePcmStreamer } from './services/stt';
+import { RustVoiceGatewayClient, StreamingAudioPlayer, type BridgeEvent, type CodecCharacterInfo, type CodecPhase } from './services/codecBridge';
 import { sfx } from './services/sfx';
 
 type TranscriptLine = { speaker: string; text: string; at: string };
@@ -115,7 +115,6 @@ function supportFaceFor(characterId: string, characters: CodecCharacterInfo[]) {
 }
 
 const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-type VoiceClient = CodecBridgeClient | RustVoiceGatewayClient;
 
 const ASSISTANT_DEDUPE_MIN_CHARS = 12;
 
@@ -144,7 +143,6 @@ function faceFor(set: FaceSet, level: number, active: boolean, tick: number) {
 
 function useCodecDemo() {
   const autoMicEnabled = import.meta.env.VITE_CODEC_AUTO_MIC !== 'false';
-  const rustGatewayEnabled = Boolean(import.meta.env.VITE_FOXLINE_GATEWAY_URL);
   const [phase, setPhase] = useState<CodecPhase>('idle');
   const [transcript, setTranscript] = useState<TranscriptLine[]>([{ speaker: 'System', text: 'Codec receiver ready. Open Memory to choose support.', at: now() }]);
   const [assistantResponse, setAssistantResponse] = useState(autoMicEnabled ? 'Mic auto-starting...' : 'Awaiting frequency activation.');
@@ -160,21 +158,15 @@ function useCodecDemo() {
   const [llmModel, setLlmModel] = useState('');
   const [pttActive, setPttActive] = useState(false);
   const [showStatus, setShowStatus] = useState(false);
-  const stt = useRef<StreamingSttService | undefined>(undefined);
   const gatewayMic = useRef<MicrophonePcmStreamer | undefined>(undefined);
-  const bridge = useRef<VoiceClient | undefined>(undefined);
+  const bridge = useRef<RustVoiceGatewayClient | undefined>(undefined);
   const player = useRef<StreamingAudioPlayer | undefined>(undefined);
   const assistantText = useRef('');
   const assistantLineIndex = useRef<number | null>(null);
   const phaseRef = useRef<CodecPhase>('idle');
   const supportCharacterRef = useRef<CodecCharacter>(fallbackCharacter);
   const activeTurnId = useRef<string | null>(null);
-  const bargeInWords = useRef(0);
-  const lastBargeInAt = useRef(0);
-  const bargeInRequiredWords = Number(import.meta.env.VITE_CODEC_BARGE_IN_WORDS || 8);
-  const bargeInCooldownMs = Number(import.meta.env.VITE_CODEC_BARGE_IN_COOLDOWN_MS || 5000);
   const bargeInMinLevel = Number(import.meta.env.VITE_CODEC_BARGE_IN_MIN_LEVEL || 0.18);
-  const bargeInLevelWindowMs = Number(import.meta.env.VITE_CODEC_BARGE_IN_LEVEL_WINDOW_MS || 1200);
   const autoResumeListeningAfterSwitch = useRef(false);
   const listeningActive = useRef(false);
   const startListeningInFlight = useRef(false);
@@ -188,7 +180,7 @@ function useCodecDemo() {
     player.current = new StreamingAudioPlayer();
     player.current.onPlaying = () => setPhase('speaking');
     player.current.onStopped = () => setPhase('listening');
-    bridge.current = rustGatewayEnabled ? new RustVoiceGatewayClient() : new CodecBridgeClient();
+    bridge.current = new RustVoiceGatewayClient();
     player.current.onDebug = (event, data) => bridge.current?.trace(event, data);
     const off = bridge.current.onEvent(async (event: BridgeEvent) => {
       if (event.type === 'ready') {
@@ -197,7 +189,7 @@ function useCodecDemo() {
         setCharacters(event.characters || []);
         setLlmModel(event.model || '');
         setConnected(true);
-        setTranscript((t) => [...t, { speaker: 'System', text: `${displaySpeakerName(character, event.characters || [])} ${rustGatewayEnabled ? 'Rust Voice Gateway' : 'codec bridge'} online.`, at: now() }]);
+        setTranscript((t) => [...t, { speaker: 'System', text: `${displaySpeakerName(character, event.characters || [])} Rust Voice Gateway online.`, at: now() }]);
         autoStartListening('bridge_ready');
       }
       if (event.type === 'character_switched') {
@@ -219,7 +211,6 @@ function useCodecDemo() {
       if (event.type === 'phase') setPhase(event.phase);
       if (event.type === 'audio_reset') {
         activeTurnId.current = null;
-        bargeInWords.current = 0;
         player.current?.stop();
         bridge.current?.trace('audio_reset_received', { reason: event.reason });
       }
@@ -265,10 +256,6 @@ function useCodecDemo() {
         await player.current?.enqueueBase64Wav(event.chunk);
       }
       if (event.type === 'audio_pcm') {
-        if (!rustGatewayEnabled && event.turnId !== activeTurnId.current) {
-          bridge.current?.trace('audio_pcm_ignored_stale', { turnId: event.turnId, activeTurnId: activeTurnId.current, index: event.index });
-          return;
-        }
         bridge.current?.trace('audio_pcm_received', { turnId: event.turnId, index: event.index, sampleRate: event.sample_rate, textChars: event.text.length, base64Chars: event.chunk.length });
         await player.current?.enqueuePcm16(event.chunk, event.sample_rate);
       }
@@ -304,7 +291,6 @@ function useCodecDemo() {
       window.clearTimeout(autoMicTimer);
       window.clearInterval(timer);
       gatewayMic.current?.stop();
-      stt.current?.stop();
       player.current?.stop();
     };
   }, []);
@@ -324,129 +310,36 @@ function useCodecDemo() {
     setError(null);
     setPhase('connecting');
     setTranscript((t) => [...t, { speaker: 'System', text: manualMode ? 'PTT open. Speak as Snake, then release/send.' : 'VAD listening. Speak as Snake; silence will send automatically.', at: now() }]);
-    if (rustGatewayEnabled) {
-      if (!gatewayMic.current) {
-        gatewayMic.current = new MicrophonePcmStreamer();
-        gatewayMic.current.onLevel((level) => {
-          setSnakeLevel(level);
-          if (level >= bargeInMinLevel) lastHighSnakeLevelAt.current = Date.now();
-        });
-        gatewayMic.current.onStatus((status) => {
-          setSttStatus(status);
-          bridge.current?.trace('gateway_mic_status', { status });
-        });
-        gatewayMic.current.onAudioFrame((data) => {
-          bridge.current?.trace('gateway_audio_frame_sent', {
-            chunksSent: data.chunksSent,
-            samples: data.samples,
-            level: data.level,
-            mode: data.mode,
-          });
-          (bridge.current as RustVoiceGatewayClient | undefined)?.sendAudioPcm16(data.pcm16);
-        });
-      }
-      try {
-        bridge.current?.trace('gateway_mic_start_attempt', { manualMode });
-        await gatewayMic.current.start(manualMode);
-        listeningActive.current = true;
-        setPttActive(manualMode);
-        setPhase('listening');
-        setSttStatus('Rust Voice Gateway mic streaming');
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        bridge.current?.trace('gateway_mic_start_failed', { manualMode, error: msg });
-        listeningActive.current = false;
-        setSttStatus(msg);
-        setError(msg);
-        setPhase('error');
-      } finally {
-        startListeningInFlight.current = false;
-      }
-      return;
-    }
-    if (!stt.current) {
-      stt.current = new StreamingSttService(import.meta.env.VITE_PARAKEET_CPP_STT_URL || defaultWsUrl('/ws/stt'), 1800, 0, 'parakeet-cpp', true);
-      stt.current.onLevel((level) => {
+    if (!gatewayMic.current) {
+      gatewayMic.current = new MicrophonePcmStreamer();
+      gatewayMic.current.onLevel((level) => {
         setSnakeLevel(level);
         if (level >= bargeInMinLevel) lastHighSnakeLevelAt.current = Date.now();
       });
-      stt.current.onStatus((status) => {
+      gatewayMic.current.onStatus((status) => {
         setSttStatus(status);
-        bridge.current?.trace('stt_status', { status });
-        if (status.startsWith('parakeet final')) {
-          setTranscript((t) => [...t, { speaker: 'System', text: status, at: now() }]);
-        }
+        bridge.current?.trace('gateway_mic_status', { status });
       });
-      stt.current.onAudioFrame((data) => {
-        bridge.current?.trace('stt_audio_frame_sent', data);
-      });
-      stt.current.onWord((word) => {
-        setLiveCaption((t) => `${t}${t ? ' ' : ''}${word}`);
-        bridge.current?.trace('stt_word', { word });
-        const nowMs = Date.now();
-        const canInterrupt = nowMs - lastBargeInAt.current > bargeInCooldownMs;
-        if (phaseRef.current === 'speaking' && canInterrupt) {
-          const hasRecentVoiceEnergy = Date.now() - lastHighSnakeLevelAt.current <= bargeInLevelWindowMs;
-          if (!hasRecentVoiceEnergy) {
-            bridge.current?.trace('barge_in_word_ignored_low_level', {
-              word,
-              bargeInWords: bargeInWords.current,
-              minLevel: bargeInMinLevel,
-              levelWindowMs: bargeInLevelWindowMs,
-            });
-            return;
-          }
-          bargeInWords.current += 1;
-          setSttStatus(`barge-in ${bargeInWords.current}/${bargeInRequiredWords}: ${word}`);
-          if (bargeInWords.current >= bargeInRequiredWords) {
-            lastBargeInAt.current = nowMs;
-            bargeInWords.current = 0;
-            activeTurnId.current = null;
-            player.current?.stop();
-            bridge.current?.interrupt();
-            setPhase('listening');
-            const interrupted = displaySpeakerName(supportCharacterRef.current, charactersRef.current);
-            setTranscript((t) => [...t, { speaker: 'System', text: `Interrupted ${interrupted}.`, at: now() }]);
-          }
-        } else {
-          if (phaseRef.current !== 'speaking') bargeInWords.current = 0;
-          setPhase('listening');
-        }
-      });
-      stt.current.onFinal((text) => {
-        if (phaseRef.current === 'speaking' && bargeInWords.current < bargeInRequiredWords) {
-          bridge.current?.trace('stt_final_ignored_during_speech', { text, bargeInWords: bargeInWords.current, required: bargeInRequiredWords });
-          setLiveCaption('');
-          bargeInWords.current = 0;
-          return;
-        }
-        activeTurnId.current = null;
-        player.current?.stop();
-        setLiveCaption('');
-        setPttActive(false);
-        setPhase('thinking');
-        bargeInWords.current = 0;
-        setTranscript((t) => [...t, { speaker: 'Snake', text, at: now() }]);
-        bridge.current?.trace('stt_final', { text });
-        const sent = bridge.current?.sendUtterance(text);
-        if (!sent) setTranscript((t) => [...t, { speaker: 'System', text: 'Could not send STT final to bridge: WebSocket not open.', at: now() }]);
-      });
-      stt.current.onError((e) => {
-        bridge.current?.trace('stt_error', { error: e });
-        setError(e);
-        setPhase('error');
+      gatewayMic.current.onAudioFrame((data) => {
+        bridge.current?.trace('gateway_audio_frame_sent', {
+          chunksSent: data.chunksSent,
+          samples: data.samples,
+          level: data.level,
+          mode: data.mode,
+        });
+        (bridge.current as RustVoiceGatewayClient | undefined)?.sendAudioPcm16(data.pcm16);
       });
     }
     try {
-      bridge.current?.trace('stt_start_attempt', { manualMode });
-      await stt.current.start(manualMode);
-      bridge.current?.trace('stt_started', { manualMode });
+      bridge.current?.trace('gateway_mic_start_attempt', { manualMode });
+      await gatewayMic.current.start(manualMode);
       listeningActive.current = true;
       setPttActive(manualMode);
       setPhase('listening');
+      setSttStatus('Rust Voice Gateway mic streaming');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      bridge.current?.trace('stt_start_failed', { manualMode, error: msg });
+      bridge.current?.trace('gateway_mic_start_failed', { manualMode, error: msg });
       listeningActive.current = false;
       setSttStatus(msg);
       setError(msg);
@@ -463,16 +356,13 @@ function useCodecDemo() {
     bridge.current?.trace('stt_stop_manual');
     listeningActive.current = false;
     gatewayMic.current?.stop();
-    stt.current?.stop();
-    if (rustGatewayEnabled) gatewayMic.current?.finalize();
-    else stt.current?.finalize();
+    gatewayMic.current?.finalize();
     setSttStatus('PTT released; finalizing transcript');
   }
   function interrupt() {
     bridge.current?.trace('ui_interrupt');
     void sfx.play('radio_cancel');
     activeTurnId.current = null;
-    bargeInWords.current = 0;
     player.current?.stop();
     gatewayMic.current?.stop();
     bridge.current?.interrupt();
@@ -483,13 +373,11 @@ function useCodecDemo() {
   function newCall() {
     bridge.current?.trace('ui_new_call');
     activeTurnId.current = null;
-    bargeInWords.current = 0;
     setLiveCaption('');
     setPttActive(false);
     bridge.current?.trace('stt_stop_new_call');
     listeningActive.current = false;
     gatewayMic.current?.stop();
-    stt.current?.stop();
     player.current?.stop();
     bridge.current?.newSession();
     assistantText.current = '';
@@ -508,13 +396,11 @@ function useCodecDemo() {
   function toggleStatus() { setShowStatus((x) => !x); }
   function switchCharacter(character: string) {
     activeTurnId.current = null;
-    bargeInWords.current = 0;
     const wasListening = phaseRef.current === 'listening';
     autoResumeListeningAfterSwitch.current = wasListening || autoMicEnabled;
     bridge.current?.trace('stt_stop_switch_character', { character, wasListening });
     listeningActive.current = false;
     gatewayMic.current?.stop();
-    stt.current?.stop();
     setPttActive(false);
     setLiveCaption('');
     player.current?.stop();

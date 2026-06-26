@@ -22,28 +22,17 @@ Foxline uses:
 
 See `ARCHITECTURE.md` for details.
 
-## Rust Voice Gateway migration
+## Rust Voice Gateway
 
-The accepted target architecture is documented in `docs/adr/0001-rust-voice-gateway-frame-pipeline.md`.
+The Rust Voice Gateway is the sole gateway and sole Brain path. The migration is complete; the TypeScript bridge has been retired (see `docs/adr/0004-retire-typescript-gateway.md`).
 
-Migration rules:
+Standing rules:
 
-- Keep `server/bridge.ts` usable until Rust benchmark parity is proven.
-- Treat `server/bridge.ts` as the latency and behavior oracle during migration.
 - Do not add a second Brain path. The gateway must talk to Pi RPC; it must not call LLM servers directly.
 - Keep browser and future Tauri clients on the same WebSocket protocol unless measurement proves otherwise.
 - Keep normal audio frames binary in the Rust gateway protocol.
 - Keep generated copyrighted/runtime assets out of git.
-
-Migration phases:
-
-1. Baseline: preserve the TypeScript bridge and emit comparable JSONL benchmark traces.
-2. Foundation: add the Rust gateway crate, canonical frame model, WebSocket transport, `.foxline` loadouts, and gateway-owned turn management.
-3. Adapters: connect Pi RPC Brain lifecycle, Qwen3-TTS worker, and Parakeet/Silero STT through gateway adapter interfaces.
-4. Frontend tools and avatar actions: negotiate frontend capabilities from `.foxline` loadouts and route semantic Avatar Actions without Codec-specific coupling.
-5. Codec UI migration: connect Foxline Codec UI to the Rust gateway while keeping the bridge path available.
-6. Benchmark gate: compare legacy and Rust JSONL traces and flag any end-to-end latency regression greater than +50ms.
-7. Cutover: make Rust gateway the default only after the demo path, interruption behavior, tool routing, and benchmark deltas are proven.
+- New latency regressions are measured against the Rust gateway's own baseline. The retired TypeScript bridge's traces remain under `benchmarks/traces/legacy-bridge/` as a frozen historical record, not a live oracle.
 
 ## Configuration split
 

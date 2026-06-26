@@ -44,9 +44,6 @@ gateway-check:
 gateway-test:
     cargo test -p foxline-voice-gateway
 
-benchmark-legacy-bridge *args:
-    bun run benchmarks/run-legacy-bridge-fixture.ts {{args}}
-
 benchmark-rust-gateway *args:
     bun run benchmarks/run-rust-gateway-fixture.ts {{args}}
 
@@ -55,12 +52,6 @@ benchmark-gateway-latency *args:
 
 preview:
     bun run preview
-
-bridge character="campbell":
-    CODEC_BRAIN_MODE=pi CODEC_TTS_MODE=worker bun run server/bridge.ts --character={{character}} --continue
-
-bridge-new character="campbell":
-    CODEC_BRAIN_MODE=pi CODEC_TTS_MODE=worker bun run server/bridge.ts --character={{character}} --new
 
 reference-transcripts-normalize *args:
     uv run --script tools/normalize_reference_transcripts.py {{args}}

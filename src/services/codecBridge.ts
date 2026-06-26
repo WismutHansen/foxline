@@ -26,13 +26,6 @@ export type BridgeEvent =
   | { type: 'disconnected' }
   | { type: 'error'; message: string };
 
-// Same-origin URL (proxied by Vite, see vite.config.ts) so the app works when
-// opened from another device, and upgrades to wss:// under HTTPS automatically.
-export function defaultWsUrl(path: string) {
-  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${proto}://${window.location.host}${path}`;
-}
-
 export class StreamingAudioPlayer {
   private ctx?: AudioContext;
   private analyser?: AnalyserNode;
@@ -150,50 +143,6 @@ export class StreamingAudioPlayer {
     for (const v of data) { const n = (v - 128) / 128; sum += n * n; }
     return Math.min(1, Math.pow(Math.max(0, Math.sqrt(sum / data.length) - 0.01) * 12, 0.7));
   }
-}
-
-export class CodecBridgeClient {
-  private ws?: WebSocket;
-  private handlers = new Set<(event: BridgeEvent) => void>();
-  private reconnectTimer?: number;
-  private reconnectDelayMs = 1000;
-  constructor(private url = import.meta.env.VITE_CODEC_BRIDGE_URL || defaultWsUrl('/ws/bridge')) {
-    // Mobile browsers drop WebSockets on tab backgrounding and network switches;
-    // reconnect as soon as the app is usable again instead of waiting out backoff.
-    window.addEventListener('online', () => this.connect());
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') this.connect();
-    });
-  }
-  connect() {
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
-    window.clearTimeout(this.reconnectTimer);
-    const ws = new WebSocket(this.url);
-    this.ws = ws;
-    ws.onopen = () => { this.reconnectDelayMs = 1000; };
-    ws.onmessage = (e) => {
-      const event = JSON.parse(String(e.data)) as BridgeEvent;
-      for (const h of this.handlers) h(event);
-    };
-    ws.onerror = () => this.emit({ type: 'error', message: `Could not connect to codec bridge at ${this.url}` });
-    ws.onclose = () => {
-      if (this.ws !== ws) return;
-      this.emit({ type: 'disconnected' });
-      this.reconnectTimer = window.setTimeout(() => this.connect(), this.reconnectDelayMs);
-      this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, 15000);
-    };
-  }
-  private emit(event: BridgeEvent) { for (const h of this.handlers) h(event); }
-  onEvent(handler: (event: BridgeEvent) => void) { this.handlers.add(handler); return () => this.handlers.delete(handler); }
-  sendUtterance(text: string) {
-    if (this.ws?.readyState !== WebSocket.OPEN) return false;
-    this.ws.send(JSON.stringify({ type: 'user_utterance', speaker: 'snake', text }));
-    return true;
-  }
-  interrupt() { this.ws?.send(JSON.stringify({ type: 'interrupt' })); }
-  newSession() { this.ws?.send(JSON.stringify({ type: 'new_session' })); }
-  switchCharacter(character: string) { this.ws?.send(JSON.stringify({ type: 'switch_character', character })); }
-  trace(event: string, data?: Record<string, unknown>) { this.ws?.send(JSON.stringify({ type: 'client_trace', event, data })); }
 }
 
 type GatewayServerEvent =
