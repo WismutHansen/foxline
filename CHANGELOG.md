@@ -34,3 +34,4 @@
 - Fixed Rust Codec Memory switching so agent-backed characters switch both the Pi-backed Agent and Persona instead of only changing the voice/presentation Persona.
 - Fixed Codec markdown table rendering by preserving GFM table rows during display cleanup and stripping leaked Pi/model channel markers before transcript and TTS output.
 - Fixed Rust gateway interruption handling so Codec interrupt and barge-in paths send abort to the active Pi RPC Brain and cancel TTS through one runtime handler.
+- Fixed voice-session output hygiene by appending a spoken-output contract to Pi launches, stripping leaked thought-trace paragraphs at the Brain boundary, and normalizing Markdown/table-shaped assistant text before TTS.

@@ -539,7 +539,7 @@ impl SentenceBuffer {
         const MIN_CHARS: usize = 28;
         const MAX_CHARS: usize = 90;
         for (idx, ch) in self.text.char_indices() {
-            if !matches!(ch, '.' | '!' | '?' | ';' | ':') {
+            if !is_likely_tts_boundary(&self.text, idx, ch) {
                 continue;
             }
             let cut = idx + ch.len_utf8();
@@ -549,6 +549,170 @@ impl SentenceBuffer {
         }
         (self.text.len() > MAX_CHARS).then_some(MAX_CHARS)
     }
+}
+
+fn is_likely_tts_boundary(text: &str, idx: usize, ch: char) -> bool {
+    if !matches!(ch, '.' | '!' | '?' | ';' | ':') {
+        return false;
+    }
+    let prev = text[..idx].chars().next_back().unwrap_or_default();
+    let next = text[idx + ch.len_utf8()..]
+        .chars()
+        .next()
+        .unwrap_or_default();
+    if ch == '.' && prev.is_ascii_digit() && next.is_ascii_digit() {
+        return false;
+    }
+    if ch == '.' {
+        let before = text[..idx]
+            .split_whitespace()
+            .next_back()
+            .unwrap_or_default()
+            .trim_matches(|c: char| !c.is_ascii_alphabetic() && c != '.');
+        let normalized = before.trim_end_matches('.').to_ascii_lowercase();
+        if matches!(
+            normalized.as_str(),
+            "mr" | "mrs" | "ms" | "dr" | "prof" | "sr" | "jr" | "st" | "vs" | "etc" | "e.g" | "i.e"
+        ) {
+            return false;
+        }
+        if before.len() == 1 && before.chars().all(|c| c.is_ascii_uppercase()) {
+            return false;
+        }
+    }
+    true
+}
+
+fn normalize_tts_text(text: &str) -> Option<String> {
+    let without_code = remove_fenced_blocks(text);
+    let mut joined = String::new();
+    for line in without_code.lines() {
+        let line = markdown_table_row_to_speech(line).unwrap_or_else(|| strip_markdown_line(line));
+        let line = line.trim();
+        if !line.is_empty() {
+            push_tts_segment(&mut joined, line);
+        }
+    }
+    let joined = collapse_whitespace(&joined);
+    (!joined.is_empty()).then_some(joined)
+}
+
+fn push_tts_segment(out: &mut String, segment: &str) {
+    if !out.is_empty() {
+        if !out.ends_with(['.', '!', '?', ';', ':']) {
+            out.push('.');
+        }
+        out.push(' ');
+    }
+    out.push_str(segment);
+}
+
+fn markdown_table_row_to_speech(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+        return None;
+    }
+    if trimmed
+        .chars()
+        .all(|ch| matches!(ch, '|' | '-' | ':' | ' '))
+    {
+        return Some(String::new());
+    }
+    let cells = trimmed
+        .trim_matches('|')
+        .split('|')
+        .map(strip_markdown_line)
+        .map(|cell| cell.trim().to_string())
+        .filter(|cell| !cell.is_empty())
+        .collect::<Vec<_>>();
+    if cells.is_empty() || cells.iter().all(|cell| cell.chars().all(|ch| ch == '-')) {
+        return Some(String::new());
+    }
+    Some(cells.join(": "))
+}
+
+fn strip_markdown_line(line: &str) -> String {
+    let mut out = strip_links_and_images(line);
+    out = out.trim_start().to_string();
+    while out.starts_with('#') {
+        out.remove(0);
+    }
+    out = out.trim_start().to_string();
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(rest) = out.strip_prefix(marker) {
+            out = rest.to_string();
+            break;
+        }
+    }
+    let digit_prefix_len = out
+        .char_indices()
+        .take_while(|(_, ch)| ch.is_ascii_digit())
+        .last()
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .unwrap_or(0);
+    if digit_prefix_len > 0 {
+        let rest = &out[digit_prefix_len..];
+        if let Some(after_marker) = rest.strip_prefix('.').or_else(|| rest.strip_prefix(')')) {
+            out = after_marker.trim_start().to_string();
+        }
+    }
+    out.replace(['*', '_', '~', '`', '|'], " ")
+        .replace(['[', ']', '(', ')'], " ")
+}
+
+fn strip_links_and_images(line: &str) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(start) = rest.find('[') {
+        out.push_str(&rest[..start]);
+        let image = rest[..start].ends_with('!');
+        if image {
+            out.pop();
+        }
+        let after_start = &rest[start + 1..];
+        let Some(end_label) = after_start.find(']') else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let label = &after_start[..end_label];
+        let after_label = &after_start[end_label + 1..];
+        if let Some(after_url) = after_label.strip_prefix('(') {
+            if let Some(end_url) = after_url.find(')') {
+                if !image {
+                    out.push_str(label);
+                }
+                rest = &after_url[end_url + 1..];
+                continue;
+            }
+        }
+        out.push_str(&rest[start..start + 1 + end_label + 1]);
+        rest = after_label;
+    }
+    out.push_str(rest);
+    out
+}
+
+fn remove_fenced_blocks(text: &str) -> String {
+    let mut out = String::new();
+    let mut in_fence = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            if !in_fence {
+                out.push_str(" code block omitted. ");
+            }
+            in_fence = !in_fence;
+            continue;
+        }
+        if !in_fence {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 async fn drain_adapter_frames(
@@ -728,17 +892,22 @@ async fn handle_runtime_frame(
                 .await?;
                 if let Some(tts) = tts.as_deref_mut() {
                     for sentence in live.sentence_buffer.push(&text) {
-                        let request = tts.speak(frame.session_id.clone(), sentence).await?;
-                        process_pipeline_outputs(ws, pipeline, trace, avatar_router, request)
-                            .await?;
+                        if let Some(tts_text) = normalize_tts_text(&sentence) {
+                            let request = tts.speak(frame.session_id.clone(), tts_text).await?;
+                            process_pipeline_outputs(ws, pipeline, trace, avatar_router, request)
+                                .await?;
+                        }
                     }
                 }
             }
             Frame::Brain(BrainFrame::Done) => {
                 if let (Some(tts), Some(text)) = (tts.as_deref_mut(), live.sentence_buffer.flush())
                 {
-                    let request = tts.speak(frame.session_id.clone(), text).await?;
-                    process_pipeline_outputs(ws, pipeline, trace, avatar_router, request).await?;
+                    if let Some(tts_text) = normalize_tts_text(&text) {
+                        let request = tts.speak(frame.session_id.clone(), tts_text).await?;
+                        process_pipeline_outputs(ws, pipeline, trace, avatar_router, request)
+                            .await?;
+                    }
                 }
                 send_event(
                     ws,
@@ -1058,7 +1227,9 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{resolve_voice_reference, AssistantTextAccumulator, SentenceBuffer};
+    use super::{
+        normalize_tts_text, resolve_voice_reference, AssistantTextAccumulator, SentenceBuffer,
+    };
 
     #[test]
     fn assistant_accumulator_drops_replayed_text_before_tts() {
@@ -1100,6 +1271,51 @@ mod tests {
         assert_eq!(chunks, vec!["Short. This is long enough to speak now."]);
         assert!(buffer.push(" Tail without punctuation").is_empty());
         assert_eq!(buffer.flush().as_deref(), Some("Tail without punctuation"));
+    }
+
+    #[test]
+    fn sentence_buffer_preserves_decimal_boundaries_for_tts() {
+        let mut buffer = SentenceBuffer::default();
+
+        let chunks = buffer.push("Tune to 140.85 and wait for confirmation.");
+
+        assert_eq!(chunks, vec!["Tune to 140.85 and wait for confirmation."]);
+    }
+
+    #[test]
+    fn tts_normalizer_converts_markdown_tables_to_speakable_text() {
+        let text = r#"
+## Today
+
+| Time | Event | Location |
+|------|-------|----------|
+| **08:00-09:00** | WG: Green.OWL | Teams |
+| **11:00-11:40** | KI-Keynote | IoT-Center |
+"#;
+
+        assert_eq!(
+            normalize_tts_text(text).as_deref(),
+            Some(
+                "Today. Time: Event: Location. 08:00-09:00: WG: Green.OWL: Teams. 11:00-11:40: KI-Keynote: IoT-Center"
+            )
+        );
+    }
+
+    #[test]
+    fn tts_normalizer_strips_markdown_noise_without_stripping_plain_numbers() {
+        let text = r#"
+1. **NVIDIA NGC** | [API paths](https://example.com)
+- 200-Festangestellte bleiben relevant.
+```json
+{"debug": true}
+```
+![chart](chart.png)
+"#;
+
+        assert_eq!(
+            normalize_tts_text(text).as_deref(),
+            Some("NVIDIA NGC API paths. 200-Festangestellte bleiben relevant. code block omitted.")
+        );
     }
 
     #[test]

@@ -190,10 +190,18 @@ function loadCharacterSystemPrompt() {
 
 function buildDefaultPiSystemPrompt() {
   const systemPrompt = loadCharacterSystemPrompt();
-  if (systemPrompt) return systemPrompt;
-  console.warn(`[bridge] SYSTEM.md missing for character=${character}; no character append prompt applied`);
-  return '';
+  if (!systemPrompt) console.warn(`[bridge] SYSTEM.md missing for character=${character}; only voice output rules will be applied`);
+  return [systemPrompt, voiceSessionPrompt].filter(Boolean).join('\n\n');
 }
+
+const voiceSessionPrompt = `You are currently connected through a real-time voice interface. Output must be directly speakable aloud.
+
+Voice output rules:
+- Do not output Markdown tables, pipe tables, code fences, headings, horizontal rules, block quotes, or decorative separators.
+- Prefer short spoken sentences and compact lists in plain prose.
+- For calendar, email, search, or tabular data, summarize the most important entries in words instead of formatting a table.
+- Do not include emojis, bullets made from symbols, raw URLs, markup syntax, or bracketed UI labels unless the user explicitly asks for exact text.
+- Never reveal hidden reasoning, thought traces, channel markers, tool protocol text, or implementation details. If a tool fails, state the exact visible error plainly.`;
 
 const brainMode = process.env.CODEC_BRAIN_MODE || 'pi';
 const piModel = process.env.CODEC_PI_MODEL || 'LM-Studio/gemma-4-26b-a4b-it';
