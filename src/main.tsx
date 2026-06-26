@@ -590,6 +590,12 @@ function speakerTag(line: TranscriptLine) {
   return line.speaker.toUpperCase();
 }
 
+function transcriptToVerbatimText(lines: TranscriptLine[]) {
+  return lines
+    .map((line) => `${speakerTag(line)}\n${line.text}`)
+    .join('\n\n');
+}
+
 function App() {
   const codec = useCodecDemo();
   const [tick, setTick] = useState(0);
@@ -597,6 +603,7 @@ function App() {
   const [memoryActiveIndex, setMemoryActiveIndex] = useState(0);
   const [transcriptInsets, setTranscriptInsets] = useState({ left: 0, right: 0 });
   const [tuneStripInsets, setTuneStripInsets] = useState({ left: 0, right: 0 });
+  const [copyNotice, setCopyNotice] = useState('');
   const codecRef = useRef<HTMLElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
   const memoryOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -655,12 +662,27 @@ function App() {
   const status = useMemo(() => codec.error ?? codec.phase.toUpperCase(), [codec.phase, codec.error]);
   const dialogLines = useMemo(() => codec.transcript.filter((line) => line.speaker.toLowerCase() !== 'system'), [codec.transcript]);
   const systemNotice = useMemo(() => {
+    if (copyNotice) return copyNotice;
     for (let i = codec.transcript.length - 1; i >= 0; i -= 1) {
       const line = codec.transcript[i];
       if (line.speaker.toLowerCase() === 'system') return line.text;
     }
     return codec.sttStatus;
-  }, [codec.transcript, codec.sttStatus]);
+  }, [codec.transcript, codec.sttStatus, copyNotice]);
+
+  const copyTranscript = async () => {
+    const text = transcriptToVerbatimText(dialogLines);
+    if (!text) {
+      setCopyNotice('No dialogue transcript to copy.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyNotice(`Copied ${dialogLines.length} transcript ${dialogLines.length === 1 ? 'line' : 'lines'} verbatim.`);
+    } catch (error) {
+      setCopyNotice(`Copy failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
 
   useEffect(() => {
     if (!memoryOpen || !codec.characters.length) return;
@@ -767,6 +789,7 @@ function App() {
             <button className={codec.pttActive ? 'armed' : ''} onClick={codec.startPushToTalk}>{codec.pttActive ? 'recording' : 'ptt'}</button>
             <button onClick={codec.stopTalking}>send</button>
             <button onClick={codec.testCall}>test</button>
+            <button onClick={copyTranscript}>copy transcript verbatim</button>
             <button onClick={codec.toggleStatus}>hide</button>
           </div>
         </div>}
