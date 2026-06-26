@@ -522,16 +522,25 @@ function useCodecDemo() {
 function normalizeMarkdownForDisplay(text: string) {
   let out = text.replace(/\r\n?/g, '\n');
 
-  // Remove common streaming artifacts while keeping readable text.
-  out = out.replace(/\bthought(?:thought)+\b/gi, '');
-
-  // Turn compact blob-style section markers into real list/paragraph structure.
   out = out
-    .replace(/:\s*(?=\*{1,3}\s*[A-Z])/g, ':\n\n')
-    .replace(/\*{3}\s*(?=[A-Z])/g, '\n\n- ')
-    .replace(/\*{2}\s*(?=[A-Z])/g, '\n- ')
-    .replace(/\s-\s(?=[A-Z])/g, '\n- ')
-    .replace(/([.!?])\s*(?=-\s|\*{1,3}\s*[A-Z])/g, '$1\n\n');
+    .replace(/<\|channel\|>\s*thought\s*<\|channel\|>/gi, '')
+    .replace(/<\|channel\|>\s*thought/gi, '')
+    .replace(/<channel\|>\s*thought/gi, '')
+    .replace(/<\|?channel\|?>/gi, '')
+    .replace(/\bthought(?:thought)+\b/gi, '');
+
+  out = out
+    .split('\n')
+    .map((line) => {
+      if (/^\s*\|.*\|\s*$/.test(line)) return line;
+      return line
+        .replace(/:\s*(?=\*{1,3}\s*[A-Z])/g, ':\n\n')
+        .replace(/\*{3}\s*(?=[A-Z])/g, '\n\n- ')
+        .replace(/\*{2}\s*(?=[A-Z])/g, '\n- ')
+        .replace(/\s-\s(?=[A-Z])/g, '\n- ')
+        .replace(/([.!?])\s*(?=-\s|\*{1,3}\s*[A-Z])/g, '$1\n\n');
+    })
+    .join('\n');
 
   // Keep markdown legible without collapsing intentional breaks.
   out = out

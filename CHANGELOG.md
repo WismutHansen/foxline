@@ -32,3 +32,4 @@
 - Added `just demo-rust` as a one-command tmux launcher for Parakeet/Silero STT, the Rust Voice Gateway, and the Codec frontend configured to open directly against the gateway.
 - Added a status bar action to copy the dialogue transcript verbatim to the clipboard.
 - Fixed Rust Codec Memory switching so agent-backed characters switch both the Pi-backed Agent and Persona instead of only changing the voice/presentation Persona.
+- Fixed Codec markdown table rendering by preserving GFM table rows during display cleanup and stripping leaked Pi/model channel markers before transcript and TTS output.

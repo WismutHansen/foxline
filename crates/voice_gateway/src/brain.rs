@@ -401,6 +401,8 @@ pub fn rpc_line_to_frames(session_id: &SessionId, line: &str) -> Result<Vec<Fram
 #[derive(Default)]
 struct RpcFrameMapper {
     assistant_content: String,
+    in_angle_tag: bool,
+    saw_internal_tags_this_turn: bool,
 }
 
 impl RpcFrameMapper {
@@ -417,6 +419,10 @@ impl RpcFrameMapper {
                     match assistant.event_type.as_str() {
                         "text_delta" => {
                             if let Some(delta) = assistant.delta {
+                                let delta = self.sanitize_delta(&delta);
+                                if delta.trim().is_empty() {
+                                    return frames;
+                                }
                                 self.assistant_content.push_str(&delta);
                                 frames.push(FrameEnvelope::new(
                                     session_id.clone(),
@@ -426,6 +432,8 @@ impl RpcFrameMapper {
                         }
                         "done" => {
                             self.assistant_content.clear();
+                            self.in_angle_tag = false;
+                            self.saw_internal_tags_this_turn = false;
                             frames.push(FrameEnvelope::new(
                                 session_id.clone(),
                                 Frame::Brain(BrainFrame::Done),
@@ -434,6 +442,7 @@ impl RpcFrameMapper {
                         _ => {}
                     }
                     if let Some(content) = assistant.content {
+                        let content = self.sanitize_full_content(&content);
                         let delta = cumulative_suffix_delta(&self.assistant_content, &content);
                         if !delta.is_empty() {
                             frames.push(FrameEnvelope::new(
@@ -485,6 +494,83 @@ impl RpcFrameMapper {
         }
         frames
     }
+
+    fn sanitize_delta(&mut self, delta: &str) -> String {
+        let no_tags = self.strip_angle_tags_streaming(delta);
+        let mut clean = sanitize_assistant_text(&no_tags);
+        if self.saw_internal_tags_this_turn && self.assistant_content.trim().is_empty() {
+            clean = strip_leading_reasoning_marker(&clean).to_string();
+        }
+        clean
+    }
+
+    fn sanitize_full_content(&mut self, content: &str) -> String {
+        let no_tags = strip_angle_tags(content);
+        let mut clean = sanitize_assistant_text(&no_tags);
+        if self.saw_internal_tags_this_turn && self.assistant_content.trim().is_empty() {
+            clean = strip_leading_reasoning_marker(&clean).to_string();
+        }
+        clean
+    }
+
+    fn strip_angle_tags_streaming(&mut self, delta: &str) -> String {
+        let mut out = String::new();
+        for ch in delta.chars() {
+            if self.in_angle_tag {
+                self.saw_internal_tags_this_turn = true;
+                if ch == '>' {
+                    self.in_angle_tag = false;
+                }
+                continue;
+            }
+            if ch == '<' {
+                self.in_angle_tag = true;
+                self.saw_internal_tags_this_turn = true;
+                continue;
+            }
+            out.push(ch);
+        }
+        out
+    }
+}
+
+fn strip_angle_tags(text: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in text.chars() {
+        if in_tag {
+            if ch == '>' {
+                in_tag = false;
+            }
+            continue;
+        }
+        if ch == '<' {
+            in_tag = true;
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn sanitize_assistant_text(text: &str) -> String {
+    text.replace("</thinking>", " ")
+        .replace("<thinking>", " ")
+        .replace("</think>", " ")
+        .replace("<think>", " ")
+        .replace("[Codec Frequency", " ")
+}
+
+fn strip_leading_reasoning_marker(text: &str) -> &str {
+    let trimmed = text.trim_start();
+    for marker in ["thought", "analysis", "reasoning"] {
+        if let Some(rest) = trimmed.strip_prefix(marker) {
+            let rest =
+                rest.trim_start_matches(|ch: char| ch == ':' || ch == '-' || ch.is_whitespace());
+            return rest;
+        }
+    }
+    text
 }
 
 fn cumulative_suffix_delta<'a>(previous: &str, content: &'a str) -> &'a str {
@@ -713,6 +799,51 @@ mod tests {
             Frame::Brain(BrainFrame::TextDelta { text }) => assert_eq!(text, " out there."),
             frame => panic!("unexpected frame: {frame:?}"),
         }
+    }
+
+    #[test]
+    fn strips_pi_rpc_channel_markers_before_brain_frames() {
+        let session_id = SessionId::new();
+        let mut mapper = RpcFrameMapper::default();
+
+        let frames = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"<|channel>thought <channel|>I'm checking the feed."}}"#,
+            )
+            .unwrap();
+
+        assert_eq!(frames.len(), 1);
+        assert!(matches!(
+            &frames[0].frame,
+            Frame::Brain(BrainFrame::TextDelta { text }) if text == "I'm checking the feed."
+        ));
+    }
+
+    #[test]
+    fn strips_split_pi_rpc_channel_markers_before_brain_frames() {
+        let session_id = SessionId::new();
+        let mut mapper = RpcFrameMapper::default();
+
+        let opening = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"<|channel"}}"#,
+            )
+            .unwrap();
+        let closing = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":">thought <channel|>Stand by."}}"#,
+            )
+            .unwrap();
+
+        assert!(opening.is_empty());
+        assert_eq!(closing.len(), 1);
+        assert!(matches!(
+            &closing[0].frame,
+            Frame::Brain(BrainFrame::TextDelta { text }) if text == "Stand by."
+        ));
     }
 
     #[test]
