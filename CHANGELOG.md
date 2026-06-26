@@ -28,3 +28,4 @@
 - Documented Persona packages as self-contained directories with generic identity, prompt, voice, and frontend-specific config sections, including centrally installed packages and workspace overrides.
 - Added two shippable original demo Persona packages, Alex Grant and Mira Chen, with generated Codec portraits and Koko/Kokoro reference voices for no-disc setups.
 - Shipped all generated Koko voice variants for the generic demo Personas, defaulting Alex Grant to the Onyx/Daniel blend and Mira Chen to the Sarah/Isabella blend.
+- Exposed the enabled Codec character catalog in the Rust Voice Gateway UI client so the Memory menu can switch Personas instead of being limited to the startup Persona.

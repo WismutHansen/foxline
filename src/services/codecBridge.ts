@@ -1,5 +1,9 @@
+import agentsManifest from '../../agents/manifest.json';
+
 export type CodecPhase = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'interrupted' | 'error';
 export type CodecCharacterInfo = { id: string; displayName: string; speakerName: string; frequency?: string; avatar?: string; enabled?: boolean };
+
+const codecCharacters = (agentsManifest.characters as CodecCharacterInfo[]).filter((character) => character.enabled !== false);
 
 export type BridgeEvent =
   | { type: 'ready'; character: string; characters?: CodecCharacterInfo[] }
@@ -213,6 +217,7 @@ export class RustVoiceGatewayClient {
   private readonly workspace = import.meta.env.VITE_FOXLINE_GATEWAY_WORKSPACE || `agents/${this.agent}`;
   private readonly loadout = import.meta.env.VITE_FOXLINE_GATEWAY_LOADOUT || 'default';
   private persona = import.meta.env.VITE_FOXLINE_GATEWAY_PERSONA || this.agent;
+  private readonly characters = codecCharacters;
 
   constructor(private url = import.meta.env.VITE_FOXLINE_GATEWAY_URL || 'ws://127.0.0.1:8780') {
     window.addEventListener('online', () => this.connect());
@@ -258,7 +263,7 @@ export class RustVoiceGatewayClient {
       const event = JSON.parse(e.data) as GatewayServerEvent;
       if (event.type === 'session_started') {
         this.sessionId = event.session_id;
-        this.emit({ type: 'ready', character: this.persona, characters: [] });
+        this.emit({ type: 'ready', character: this.persona, characters: this.characters });
         this.emit({ type: 'session', sessionId: event.session_id, sessionName: `gateway:${this.agent}:${this.persona}` });
       } else if (event.type === 'session_ended') {
         this.emit({ type: 'phase', phase: 'idle' });
@@ -308,8 +313,9 @@ export class RustVoiceGatewayClient {
   interrupt() { this.ws?.send(JSON.stringify({ type: 'interrupt' })); }
   newSession() { this.restartSession(); }
   switchPersona(persona: string) {
+    if (!this.characters.some((character) => character.id === persona)) return;
     this.persona = persona;
-    this.emit({ type: 'character_switched', character: persona, characters: [] });
+    this.emit({ type: 'character_switched', character: persona, characters: this.characters });
     this.restartSession();
   }
   switchCharacter(character: string) { this.switchPersona(character); }
