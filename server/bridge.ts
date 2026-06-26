@@ -109,7 +109,7 @@ function buildPiArgs() {
 
 
 type ClientMsg = { type: 'user_utterance'; text: string; speaker?: string; character?: string } | { type: 'interrupt' } | { type: 'new_session' } | { type: 'switch_character'; character: string } | { type: 'client_trace'; event: string; data?: Record<string, unknown> };
-type RpcEvent = { type: string; assistantMessageEvent?: { type: string; delta?: string; content?: string }; data?: any; message?: any; toolCallId?: string; toolName?: string; command?: string; success?: boolean; error?: string };
+type RpcEvent = { type: string; assistantMessageEvent?: { type: string; delta?: string; content?: string; channel?: string; phase?: string; reasoning?: string; reasoning_content?: string }; data?: any; message?: any; toolCallId?: string; toolName?: string; command?: string; success?: boolean; error?: string };
 type Filler = { agent?: string; category: 'tool_start' | 'tool_slow' | 'tool_done'; text: string; path: string };
 type ChatRole = 'user' | 'assistant';
 type ChatMessage = { role: ChatRole; text: string };
@@ -228,6 +228,15 @@ function sanitizeAssistantText(text: string) {
   return sanitizeAssistantDelta(text)
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function isHiddenAssistantEvent(event: NonNullable<RpcEvent['assistantMessageEvent']>) {
+  const hidden = new Set(['thought', 'thought_delta', 'thinking', 'thinking_delta', 'analysis', 'analysis_delta', 'reasoning', 'reasoning_delta']);
+  const fields = [event.type, event.channel, event.phase].map((value) => String(value || '').trim().toLowerCase());
+  if (fields.some((value) => hidden.has(value))) return true;
+  const visible = `${event.delta || ''}${event.content || ''}`.trim();
+  const reasoning = `${event.reasoning || ''}${event.reasoning_content || ''}`.trim();
+  return !visible && Boolean(reasoning);
 }
 
 function stripMarkdownForTts(text: string) {
@@ -797,6 +806,7 @@ class PiRpc implements Brain {
     if (event.type !== 'message_update') return;
     const u = event.assistantMessageEvent;
     if (!u) return;
+    if (isHiddenAssistantEvent(u)) return;
     if (u.type === 'text_delta' && u.delta) {
       const noTags = this.stripAngleTagsStreaming(u.delta);
       const cleanDelta = sanitizeAssistantDelta(noTags);
@@ -906,7 +916,7 @@ Bun.serve({
     open(ws) {
       clients.add(ws);
       console.log(`[bridge] client connected (${clients.size})`);
-      ws.send(JSON.stringify({ type: 'ready', character, characters: enabledCharacters() }));
+      ws.send(JSON.stringify({ type: 'ready', character, characters: enabledCharacters(), model: piModel }));
       brain.onClientConnected?.();
     },
     close(ws) {

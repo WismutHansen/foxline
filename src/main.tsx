@@ -157,6 +157,7 @@ function useCodecDemo() {
   const [connected, setConnected] = useState(false);
   const [liveCaption, setLiveCaption] = useState('');
   const [sttStatus, setSttStatus] = useState('PTT idle');
+  const [llmModel, setLlmModel] = useState('');
   const [pttActive, setPttActive] = useState(false);
   const [showStatus, setShowStatus] = useState(false);
   const stt = useRef<StreamingSttService | undefined>(undefined);
@@ -194,6 +195,7 @@ function useCodecDemo() {
         const character = event.character || fallbackCharacter;
         setSupportCharacter(character);
         setCharacters(event.characters || []);
+        setLlmModel(event.model || '');
         setConnected(true);
         setTranscript((t) => [...t, { speaker: 'System', text: `${displaySpeakerName(character, event.characters || [])} ${rustGatewayEnabled ? 'Rust Voice Gateway' : 'codec bridge'} online.`, at: now() }]);
         autoStartListening('bridge_ready');
@@ -280,7 +282,10 @@ function useCodecDemo() {
           return next;
         });
       }
-      if (event.type === 'session' && event.sessionId) setTranscript((t) => [...t, { speaker: 'System', text: `Pi session ${event.sessionName || event.sessionId}`, at: now() }]);
+      if (event.type === 'session' && event.sessionId) {
+        setLlmModel(event.model || '');
+        setTranscript((t) => [...t, { speaker: 'System', text: `Pi session ${event.sessionName || event.sessionId}`, at: now() }]);
+      }
       if (event.type === 'disconnected') {
         setConnected(false);
         void sfx.play('codec_noise', { gain: 0.5 });
@@ -516,7 +521,7 @@ function useCodecDemo() {
     bridge.current?.switchCharacter(character);
   }
 
-  return { phase, transcript, assistantResponse, supportCharacter, characters, snakeLevel, campbellLevel, error, connected, liveCaption, sttStatus, pttActive, showStatus, activateColonel, startPushToTalk, stopTalking, interrupt, newCall, testCall, toggleStatus, switchCharacter };
+  return { phase, transcript, assistantResponse, supportCharacter, characters, snakeLevel, campbellLevel, error, connected, liveCaption, sttStatus, llmModel, pttActive, showStatus, activateColonel, startPushToTalk, stopTalking, interrupt, newCall, testCall, toggleStatus, switchCharacter };
 }
 
 function normalizeMarkdownForDisplay(text: string) {
@@ -788,6 +793,8 @@ function App() {
             <span className="statusValue">{codec.connected ? 'online' : 'offline'}</span>
             <span className="statusLabel">phase</span>
             <span className="statusValue">{status.toLowerCase()}</span>
+            <span className="statusLabel">model</span>
+            <span className="statusValue" title={codec.llmModel || 'unknown'}>{codec.llmModel || 'unknown'}</span>
           </div>
           <div className="statusGroup">
             <LevelBar label="mic" level={codec.snakeLevel} />

@@ -12,7 +12,7 @@ const agentWorkspaceIds = new Set(
 );
 
 export type BridgeEvent =
-  | { type: 'ready'; character: string; characters?: CodecCharacterInfo[] }
+  | { type: 'ready'; character: string; characters?: CodecCharacterInfo[]; model?: string }
   | { type: 'character_switched'; character: string; characters?: CodecCharacterInfo[] }
   | { type: 'phase'; phase: CodecPhase }
   | { type: 'assistant_delta'; delta: string; turnId: string }
@@ -22,7 +22,7 @@ export type BridgeEvent =
   | { type: 'audio_pcm'; chunk: string; text: string; index: number; sample_rate: number; turnId: string }
   | { type: 'turn_started' | 'turn_completed'; turnId: string; character?: string }
   | { type: 'audio_reset'; reason?: string }
-  | { type: 'session'; sessionFile?: string; sessionId?: string; sessionName?: string }
+  | { type: 'session'; sessionFile?: string; sessionId?: string; sessionName?: string; model?: string }
   | { type: 'disconnected' }
   | { type: 'error'; message: string };
 
@@ -198,7 +198,7 @@ export class CodecBridgeClient {
 
 type GatewayServerEvent =
   | { type: 'hello'; protocol_version: number; binary_audio: boolean }
-  | { type: 'session_started'; session_id: string }
+  | { type: 'session_started'; session_id: string; model?: string }
   | { type: 'session_ended' }
   | { type: 'phase'; phase: CodecPhase }
   | { type: 'turn_started'; turn_id: string; character?: string; persona?: string }
@@ -269,8 +269,8 @@ export class RustVoiceGatewayClient {
       const event = JSON.parse(e.data) as GatewayServerEvent;
       if (event.type === 'session_started') {
         this.sessionId = event.session_id;
-        this.emit({ type: 'ready', character: this.persona, characters: this.characters });
-        this.emit({ type: 'session', sessionId: event.session_id, sessionName: `gateway:${this.agent}:${this.persona}` });
+        this.emit({ type: 'ready', character: this.persona, characters: this.characters, model: event.model });
+        this.emit({ type: 'session', sessionId: event.session_id, sessionName: `gateway:${this.agent}:${this.persona}`, model: event.model });
       } else if (event.type === 'session_ended') {
         this.emit({ type: 'phase', phase: 'idle' });
       } else if (event.type === 'phase') {

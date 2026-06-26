@@ -404,6 +404,8 @@ struct AssistantMessageEvent {
     content: Option<String>,
     channel: Option<String>,
     phase: Option<String>,
+    reasoning: Option<String>,
+    reasoning_content: Option<String>,
 }
 
 pub fn rpc_line_to_frames(session_id: &SessionId, line: &str) -> Result<Vec<FrameEnvelope>> {
@@ -593,6 +595,7 @@ fn is_hidden_assistant_event(event: &AssistantMessageEvent) -> bool {
     is_hidden_channel(Some(event.event_type.as_str()))
         || is_hidden_channel(event.channel.as_deref())
         || is_hidden_channel(event.phase.as_deref())
+        || has_reasoning_only_payload(event)
 }
 
 fn is_hidden_channel(value: Option<&str>) -> bool {
@@ -611,6 +614,28 @@ fn is_hidden_channel(value: Option<&str>) -> bool {
                     | "reasoning_delta"
             )
     )
+}
+
+fn has_reasoning_only_payload(event: &AssistantMessageEvent) -> bool {
+    let has_visible_text = event
+        .delta
+        .as_deref()
+        .is_some_and(|text| !text.trim().is_empty())
+        || event
+            .content
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty());
+    if has_visible_text {
+        return false;
+    }
+    event
+        .reasoning
+        .as_deref()
+        .is_some_and(|text| !text.trim().is_empty())
+        || event
+            .reasoning_content
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
 }
 
 fn cumulative_suffix_delta<'a>(previous: &str, content: &'a str) -> &'a str {
@@ -934,6 +959,29 @@ mod tests {
             &spoken[0].frame,
             Frame::Brain(BrainFrame::TextDelta { text }) if text == "Here's your agenda for today: first, Kita at eight."
         ));
+    }
+
+    #[test]
+    fn drops_provider_reasoning_fields_without_visible_content() {
+        let session_id = SessionId::new();
+        let mut mapper = RpcFrameMapper::default();
+
+        let qwen = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","reasoning":"Here's a thinking process.","content":null}}"#,
+            )
+            .unwrap();
+        let gemma = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","reasoning_content":"Internal reasoning.","content":null}}"#,
+            )
+            .unwrap();
+
+        assert!(qwen.is_empty());
+        assert!(gemma.is_empty());
+        assert!(mapper.assistant_content.is_empty());
     }
 
     #[test]

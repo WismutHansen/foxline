@@ -35,3 +35,5 @@
 - Fixed Codec markdown table rendering by preserving GFM table rows during display cleanup and stripping leaked Pi/model channel markers before transcript and TTS output.
 - Fixed Rust gateway interruption handling so Codec interrupt and barge-in paths send abort to the active Pi RPC Brain and cancel TTS through one runtime handler.
 - Fixed voice-session output hygiene by appending a spoken-output contract to Pi launches, suppressing structured hidden reasoning-channel events at the Brain boundary, and normalizing Markdown/table-shaped assistant text before TTS.
+- Fixed model-independent reasoning suppression by ignoring structured provider reasoning fields such as `reasoning` and `reasoning_content` when no visible assistant text is present.
+- Added the active Pi model to the Codec status bar for Rust gateway and legacy bridge sessions.

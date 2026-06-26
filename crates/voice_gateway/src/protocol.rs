@@ -51,6 +51,7 @@ pub enum ServerEvent {
     },
     SessionStarted {
         session_id: String,
+        model: Option<String>,
     },
     SessionEnded,
     Phase {
@@ -99,4 +100,28 @@ pub enum ServerEvent {
         name: String,
         reason: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::ServerEvent;
+
+    #[test]
+    fn session_started_serializes_current_model() {
+        let event = ServerEvent::SessionStarted {
+            session_id: "session-1".to_string(),
+            model: Some("qwen3.6-35b".to_string()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({
+                "type": "session_started",
+                "session_id": "session-1",
+                "model": "qwen3.6-35b"
+            })
+        );
+    }
 }

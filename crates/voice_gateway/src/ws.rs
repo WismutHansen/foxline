@@ -267,6 +267,7 @@ async fn handle_connection(
                             &mut ws,
                             &ServerEvent::SessionStarted {
                                 session_id: session_id_text.clone(),
+                                model: resolved.loadout.pi.model.clone(),
                             },
                         )
                         .await?;
