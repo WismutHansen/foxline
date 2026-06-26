@@ -4,6 +4,12 @@ export type CodecPhase = 'idle' | 'connecting' | 'listening' | 'thinking' | 'spe
 export type CodecCharacterInfo = { id: string; displayName: string; speakerName: string; frequency?: string; avatar?: string; enabled?: boolean };
 
 const codecCharacters = (agentsManifest.characters as CodecCharacterInfo[]).filter((character) => character.enabled !== false);
+const agentWorkspaceModules = import.meta.glob<string>('../../agents/*/SYSTEM.md', { eager: true, query: '?raw', import: 'default' });
+const agentWorkspaceIds = new Set(
+  Object.keys(agentWorkspaceModules)
+    .map((path) => path.match(/\.\.\/\.\.\/agents\/([^/]+)\/SYSTEM\.md$/)?.[1])
+    .filter(Boolean) as string[],
+);
 
 export type BridgeEvent =
   | { type: 'ready'; character: string; characters?: CodecCharacterInfo[] }
@@ -213,8 +219,8 @@ export class RustVoiceGatewayClient {
   private sessionId = '';
   private reconnectTimer?: number;
   private reconnectDelayMs = 1000;
-  private readonly agent = import.meta.env.VITE_FOXLINE_GATEWAY_AGENT || 'campbell';
-  private readonly workspace = import.meta.env.VITE_FOXLINE_GATEWAY_WORKSPACE || `agents/${this.agent}`;
+  private agent = import.meta.env.VITE_FOXLINE_GATEWAY_AGENT || 'campbell';
+  private readonly workspaceOverride = import.meta.env.VITE_FOXLINE_GATEWAY_WORKSPACE || '';
   private readonly loadout = import.meta.env.VITE_FOXLINE_GATEWAY_LOADOUT || 'default';
   private persona = import.meta.env.VITE_FOXLINE_GATEWAY_PERSONA || this.agent;
   private readonly characters = codecCharacters;
@@ -249,7 +255,7 @@ export class RustVoiceGatewayClient {
         type: 'start_session',
         agent: this.agent,
         persona: this.persona,
-        workspace: this.workspace,
+        workspace: this.workspace(),
         loadout: this.loadout,
       }));
     };
@@ -318,8 +324,16 @@ export class RustVoiceGatewayClient {
     this.emit({ type: 'character_switched', character: persona, characters: this.characters });
     this.restartSession();
   }
-  switchCharacter(character: string) { this.switchPersona(character); }
+  switchCharacter(character: string) {
+    if (!this.characters.some((entry) => entry.id === character)) return;
+    if (!this.workspaceOverride && agentWorkspaceIds.has(character)) this.agent = character;
+    this.switchPersona(character);
+  }
   trace(_event: string, _data?: Record<string, unknown>) {}
+
+  private workspace() {
+    return this.workspaceOverride || `agents/${this.agent}`;
+  }
 
   private restartSession() {
     this.ws?.send(JSON.stringify({ type: 'end_session' }));
