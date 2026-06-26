@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Documented client-owned STT/TTS as a capability-negotiated ownership slot (ADR 0003): a frontend can own STT and/or TTS so the gateway skips the corresponding worker, while turn authority and the Pi Brain path stay gateway-owned. Accepted as design direction and target protocol shape; not yet implemented.
 - Added the initial Rust Voice Gateway crate with XDG config loading, JSON schema output, canonical frame types, a linear frame pipeline, JSONL tracing, and a WebSocket protocol shell using JSON control messages plus binary PCM audio frames.
 - Added the first gateway-owned turn manager with configurable turn strategy thresholds, frontend VAD hints as advisory input, STT/VAD-driven turn frames, and barge-in interruption propagation.
 - Added `.foxline` voice loadout resolution with bundled and project-local voice extension references, adapter selection defaults, lifecycle policy fields, and schema documentation.

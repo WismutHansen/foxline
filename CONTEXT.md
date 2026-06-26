@@ -42,6 +42,10 @@ _Avoid_: Agent config, codec config
 A capability implemented by the connected frontend that the Brain can request through the Voice Gateway during a voice session.
 _Avoid_: Browser tool, UI command
 
+**Speech Ownership**:
+Which side runs a speech stage for a session, negotiated in frontend capabilities at `hello`. A stage is either gateway-owned (the default) or client-owned. Client-owned STT or TTS does not change turn authority or the Brain path; the gateway always owns the session. See `docs/adr/0003-client-owned-speech-capabilities.md`.
+_Avoid_: Browser STT, WASM mode, client-mode (say client-owned STT/TTS or speech ownership)
+
 **Voice Extension**:
 A Pi extension loaded only for voice sessions by the Voice Gateway, either from bundled standard extensions or project-local `.foxline/extensions/` paths.
 _Avoid_: Default Pi extension, frontend plugin
