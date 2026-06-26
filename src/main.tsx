@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './styles.css';
 import { MicrophonePcmStreamer } from './services/stt';
-import { RustVoiceGatewayClient, StreamingAudioPlayer, type BridgeEvent, type CodecCharacterInfo, type CodecPhase } from './services/codecBridge';
+import { RustVoiceGatewayClient, StreamingAudioPlayer, type BridgeEvent, type CodecCharacterInfo, type CodecPhase } from './services/gatewayClient';
 import { sfx } from './services/sfx';
 
 type TranscriptLine = { speaker: string; text: string; at: string };
