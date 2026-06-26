@@ -315,33 +315,20 @@ async fn handle_connection(
                     }
                     ClientControl::Interrupt => {
                         trace.event(EVENT_BARGE_IN_RECEIVED, json!({}))?;
-                        if let Some(brain) = &brain {
-                            brain.lock().await.abort().await?;
-                        }
-                        if let Some(tts_adapter) = tts.as_deref_mut() {
-                            let cancel = tts_adapter.cancel(session_id.clone()).await?;
-                            handle_runtime_frame(
-                                &mut ws,
-                                &mut pipeline,
-                                &trace,
-                                &avatar_router,
-                                &mut live,
-                                brain.as_ref(),
-                                &mut tts,
-                                cancel,
-                            ).await?;
-                        }
                         let frame = FrameEnvelope::new(
                             session_id.clone(),
                             Frame::Turn(TurnFrame::Interrupted {
                                 reason: InterruptReason::FrontendBargeIn,
                             }),
                         );
-                        process_pipeline_outputs(
+                        handle_runtime_frame(
                             &mut ws,
                             &mut pipeline,
                             &trace,
                             &avatar_router,
+                            &mut live,
+                            brain.as_ref(),
+                            &mut tts,
                             frame,
                         )
                         .await?;
@@ -687,6 +674,14 @@ async fn handle_runtime_frame(
                 }
             }
             Frame::Turn(TurnFrame::Interrupted { .. }) => {
+                if let Some(brain) = brain {
+                    brain.lock().await.abort().await?;
+                    trace.event("brain_abort_sent", json!({}))?;
+                }
+                if let Some(tts_adapter) = tts.as_deref_mut() {
+                    let cancel = tts_adapter.cancel(frame.session_id.clone()).await?;
+                    process_pipeline_outputs(ws, pipeline, trace, avatar_router, cancel).await?;
+                }
                 live.reset_assistant();
                 send_event(
                     ws,
