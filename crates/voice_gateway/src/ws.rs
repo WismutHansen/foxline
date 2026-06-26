@@ -586,8 +586,15 @@ fn is_likely_tts_boundary(text: &str, idx: usize, ch: char) -> bool {
 fn normalize_tts_text(text: &str) -> Option<String> {
     let without_code = remove_fenced_blocks(text);
     let mut joined = String::new();
-    for line in without_code.lines() {
-        let line = markdown_table_row_to_speech(line).unwrap_or_else(|| strip_markdown_line(line));
+    let mut in_table = false;
+    for raw_line in without_code.lines() {
+        let table_line = markdown_table_row_to_speech(raw_line, in_table);
+        if table_line.is_some() {
+            in_table = true;
+        } else if !raw_line.trim().is_empty() {
+            in_table = false;
+        }
+        let line = table_line.unwrap_or_else(|| strip_markdown_line(raw_line));
         let line = line.trim();
         if !line.is_empty() {
             push_tts_segment(&mut joined, line);
@@ -607,7 +614,7 @@ fn push_tts_segment(out: &mut String, segment: &str) {
     out.push_str(segment);
 }
 
-fn markdown_table_row_to_speech(line: &str) -> Option<String> {
+fn markdown_table_row_to_speech(line: &str, in_table: bool) -> Option<String> {
     let trimmed = line.trim();
     if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
         return None;
@@ -616,6 +623,9 @@ fn markdown_table_row_to_speech(line: &str) -> Option<String> {
         .chars()
         .all(|ch| matches!(ch, '|' | '-' | ':' | ' '))
     {
+        return Some(String::new());
+    }
+    if !in_table {
         return Some(String::new());
     }
     let cells = trimmed
@@ -1295,9 +1305,7 @@ mod tests {
 
         assert_eq!(
             normalize_tts_text(text).as_deref(),
-            Some(
-                "Today. Time: Event: Location. 08:00-09:00: WG: Green.OWL: Teams. 11:00-11:40: KI-Keynote: IoT-Center"
-            )
+            Some("Today. 08:00-09:00: WG: Green.OWL: Teams. 11:00-11:40: KI-Keynote: IoT-Center")
         );
     }
 

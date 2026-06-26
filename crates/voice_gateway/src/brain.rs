@@ -402,6 +402,8 @@ struct AssistantMessageEvent {
     event_type: String,
     delta: Option<String>,
     content: Option<String>,
+    channel: Option<String>,
+    phase: Option<String>,
 }
 
 pub fn rpc_line_to_frames(session_id: &SessionId, line: &str) -> Result<Vec<FrameEnvelope>> {
@@ -427,6 +429,9 @@ impl RpcFrameMapper {
         match event.event_type.as_str() {
             "message_update" => {
                 if let Some(assistant) = event.assistant_message_event {
+                    if is_hidden_assistant_event(&assistant) {
+                        return frames;
+                    }
                     match assistant.event_type.as_str() {
                         "text_delta" => {
                             if let Some(delta) = assistant.delta {
@@ -565,13 +570,11 @@ fn strip_angle_tags(text: &str) -> String {
 }
 
 fn sanitize_assistant_text(text: &str) -> String {
-    let without_tags = text
-        .replace("</thinking>", " ")
+    text.replace("</thinking>", " ")
         .replace("<thinking>", " ")
         .replace("</think>", " ")
         .replace("<think>", " ")
-        .replace("[Codec Frequency", " ");
-    strip_leading_thought_trace(&without_tags)
+        .replace("[Codec Frequency", " ")
 }
 
 fn strip_leading_reasoning_marker(text: &str) -> &str {
@@ -586,57 +589,28 @@ fn strip_leading_reasoning_marker(text: &str) -> &str {
     text
 }
 
-fn strip_leading_thought_trace(text: &str) -> String {
-    let normalized = text.replace("\r\n", "\n");
-    let Some(cut) = leading_thought_trace_cut(&normalized) else {
-        return text.to_string();
-    };
-    normalized[cut..].trim_start().to_string()
+fn is_hidden_assistant_event(event: &AssistantMessageEvent) -> bool {
+    is_hidden_channel(Some(event.event_type.as_str()))
+        || is_hidden_channel(event.channel.as_deref())
+        || is_hidden_channel(event.phase.as_deref())
 }
 
-fn leading_thought_trace_cut(text: &str) -> Option<usize> {
-    let mut scan = 0;
-    let mut cut = None;
-    while scan < text.len() {
-        let remaining = &text[scan..];
-        if remaining.trim_start().is_empty() {
-            break;
-        }
-        let leading_ws = remaining.len() - remaining.trim_start().len();
-        let paragraph_start = scan + leading_ws;
-        let paragraph = &text[paragraph_start..];
-        let (paragraph_end, next_scan) = if let Some(blank) = paragraph.find("\n\n") {
-            (paragraph_start + blank, paragraph_start + blank + 2)
-        } else if let Some(single) = paragraph.find('\n') {
-            (paragraph_start + single, paragraph_start + single + 1)
-        } else {
-            (text.len(), text.len())
-        };
-        let candidate = text[paragraph_start..paragraph_end].trim();
-        if !looks_like_thought_trace(candidate) {
-            break;
-        }
-        cut = Some(next_scan);
-        scan = next_scan;
-    }
-    cut
-}
-
-fn looks_like_thought_trace(paragraph: &str) -> bool {
-    if paragraph.is_empty() {
-        return false;
-    }
-    let lower = paragraph.to_ascii_lowercase();
-    lower.starts_with("the user ")
-        || lower.starts_with("user ")
-        || lower.starts_with("i should ")
-        || lower.starts_with("i need to ")
-        || lower.starts_with("i will ")
-        || lower.starts_with("i'll ")
-        || lower.starts_with("let me ")
-        || lower.contains(" no specific request")
-        || lower.contains(" should respond ")
-        || lower.contains(" wants to know ")
+fn is_hidden_channel(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|value| value.trim().to_ascii_lowercase()),
+        Some(value)
+            if matches!(
+                value.as_str(),
+                "thought"
+                    | "thought_delta"
+                    | "thinking"
+                    | "thinking_delta"
+                    | "analysis"
+                    | "analysis_delta"
+                    | "reasoning"
+                    | "reasoning_delta"
+            )
+    )
 }
 
 fn cumulative_suffix_delta<'a>(previous: &str, content: &'a str) -> &'a str {
@@ -927,15 +901,11 @@ mod tests {
         let frames = mapper
             .line_to_frames(
                 &session_id,
-                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"User just said \"Hey.\" - casual greeting, no specific request. I should respond warmly.\n\nHey! What's up? Need anything?"}}"#,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","channel":"thought","delta":"User just said \"Hey.\" - casual greeting, no specific request. I should respond warmly."}}"#,
             )
             .unwrap();
 
-        assert_eq!(frames.len(), 1);
-        assert!(matches!(
-            &frames[0].frame,
-            Frame::Brain(BrainFrame::TextDelta { text }) if text == "Hey! What's up? Need anything?"
-        ));
+        assert!(frames.is_empty());
     }
 
     #[test]
@@ -946,19 +916,24 @@ mod tests {
         let frames = mapper
             .line_to_frames(
                 &session_id,
-                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","content":"The user wants to know what's on their calendar. Let me check.\n\nHere's your agenda for today: first, Kita at eight."}}"#,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"reasoning_delta","content":"The user wants to know what's on their calendar. Let me check."}}"#,
             )
             .unwrap();
 
-        assert_eq!(frames.len(), 1);
+        assert!(frames.is_empty());
+        assert!(mapper.assistant_content.is_empty());
+
+        let spoken = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","content":"Here's your agenda for today: first, Kita at eight."}}"#,
+            )
+            .unwrap();
+        assert_eq!(spoken.len(), 1);
         assert!(matches!(
-            &frames[0].frame,
+            &spoken[0].frame,
             Frame::Brain(BrainFrame::TextDelta { text }) if text == "Here's your agenda for today: first, Kita at eight."
         ));
-        assert_eq!(
-            mapper.assistant_content,
-            "Here's your agenda for today: first, Kita at eight."
-        );
     }
 
     #[test]
