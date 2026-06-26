@@ -28,10 +28,10 @@ Current platform status:
 scripts/install-assets.sh -y
 ```
 
-3. Start full runtime (tmux + bridge + frontend):
+3. Start full Rust gateway runtime (tmux + STT + Rust gateway + frontend):
 
 ```bash
-scripts/foxline
+just demo-rust
 ```
 
 ## Source media options
@@ -56,7 +56,8 @@ scripts/install-assets.sh --force
 
 - Setup deps only: `scripts/setup-deps.sh`
 - Start STT/transcript services only: `scripts/start-services.sh`
-- Start full app in tmux: `scripts/foxline`
+- Start full Rust gateway app in tmux: `just demo-rust`
+- Start legacy bridge app in tmux: `scripts/foxline`
 
 Canonical entrypoints are the scripts in `scripts/`.
 
@@ -106,11 +107,12 @@ Optional shortcuts:
 ```bash
 just install
 just dev
+just demo-rust
 just gateway-check
 just gateway -- --bind 127.0.0.1:8780
 ```
 
-The Rust Voice Gateway is under active migration in `crates/voice_gateway`. The current demo path still uses `server/bridge.ts` until benchmark parity is proven. See `ARCHITECTURE.md`, `docs/migration.md`, `docs/benchmarks.md`, and `docs/foxline-loadouts.md`.
+The Rust Voice Gateway is under active migration in `crates/voice_gateway`. `just demo-rust` is the primary Rust demo path; the legacy TypeScript bridge remains available through `scripts/foxline` while migration work continues. See `ARCHITECTURE.md`, `docs/migration.md`, `docs/benchmarks.md`, and `docs/foxline-loadouts.md`.
 
 ## Generated outputs
 

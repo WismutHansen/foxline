@@ -17,8 +17,14 @@ services *args:
 demo-tmux:
     scripts/foxline
 
+demo-rust:
+    scripts/foxline-rust
+
 foxline *args:
     scripts/foxline {{args}}
+
+foxline-rust *args:
+    scripts/foxline-rust {{args}}
 
 dev:
     bun run dev

@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/foxline-rust
+
+Starts Foxline in tmux with Parakeet/Silero STT, the Rust Voice Gateway,
+and the Vite frontend configured to connect directly to the Rust gateway.
+
+Environment:
+  FOXLINE_TMUX_SESSION       tmux session name (default: foxline-rust)
+  FOXLINE_GATEWAY_BIND       gateway bind address (default: 127.0.0.1:8780)
+  VITE_PORT                  frontend port (default: 5173)
+  CODEC_OPEN_BROWSER         open browser after startup, 1/0 (default: 1)
+  CODEC_OPEN_BROWSER_DELAY   seconds before opening browser (default: 2)
+  VITE_FOXLINE_GATEWAY_AGENT startup Pi-backed agent (default: campbell)
+  VITE_FOXLINE_GATEWAY_PERSONA startup voice/presentation persona (default: agent)
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+SESSION="${FOXLINE_TMUX_SESSION:-foxline-rust}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+GATEWAY_BIND="${FOXLINE_GATEWAY_BIND:-127.0.0.1:8780}"
+GATEWAY_URL="${VITE_FOXLINE_GATEWAY_URL:-ws://$GATEWAY_BIND}"
+WEB_URL="${CODEC_WEB_URL:-http://127.0.0.1:${VITE_PORT:-5173}/}"
+OPEN_BROWSER="${CODEC_OPEN_BROWSER:-1}"
+OPEN_BROWSER_DELAY="${CODEC_OPEN_BROWSER_DELAY:-2}"
+TRACE_DIR="${FOXLINE_GATEWAY_TRACE_DIR:-$ROOT/benchmarks/traces/rust-gateway}"
+
+open_default_browser() {
+  local url="$1"
+  if command -v open >/dev/null 2>&1; then open "$url"
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$url"
+  elif command -v cmd.exe >/dev/null 2>&1; then cmd.exe /c start "" "$url"
+  else return 1
+  fi
+}
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "tmux is required. Install it first or run scripts/setup-deps.sh." >&2
+  exit 1
+fi
+
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+  echo "tmux session '$SESSION' already exists."
+  if [[ "$OPEN_BROWSER" == "1" ]]; then
+    (sleep "$OPEN_BROWSER_DELAY"; open_default_browser "$WEB_URL" >/dev/null 2>&1 || true) &
+    echo "Opening browser: $WEB_URL"
+  fi
+  if [[ -n "${TMUX:-}" ]]; then exec tmux switch-client -t "$SESSION"; fi
+  exec tmux attach -t "$SESSION"
+fi
+
+tmux new-session -d -s "$SESSION" -n stt -c "$ROOT" \
+  'scripts/start-services.sh --no-transcript-server --foreground; echo; echo "Parakeet+Silero STT exited. Press enter to close."; read'
+
+tmux new-window -t "$SESSION" -n gateway -c "$ROOT" \
+  "sleep 2; FOXLINE_GATEWAY_BIND='$GATEWAY_BIND' FOXLINE_GATEWAY_TRACE_DIR='$TRACE_DIR' cargo run -p foxline-voice-gateway; echo; echo 'Rust gateway exited. Press enter to close.'; read"
+
+tmux new-window -t "$SESSION" -n app -c "$ROOT" \
+  "sleep 3; VITE_FOXLINE_GATEWAY_URL='$GATEWAY_URL' bun run dev; echo; echo 'Vite exited. Press enter to close.'; read"
+
+tmux select-window -t "$SESSION:app"
+
+if [[ "$OPEN_BROWSER" == "1" ]]; then
+  (sleep "$OPEN_BROWSER_DELAY"; open_default_browser "$WEB_URL" >/dev/null 2>&1 || true) &
+  echo "Opening browser: $WEB_URL"
+fi
+
+echo "Started tmux session '$SESSION' with Parakeet/Silero STT, Rust Voice Gateway, and Codec UI."
+echo "Gateway: $GATEWAY_URL"
+echo "Frontend: $WEB_URL"
+echo "Trace dir: $TRACE_DIR"
+echo "Attach/detach: tmux attach -t $SESSION / Ctrl-b d"
+if [[ -n "${TMUX:-}" ]]; then exec tmux switch-client -t "$SESSION"; fi
+exec tmux attach -t "$SESSION"
