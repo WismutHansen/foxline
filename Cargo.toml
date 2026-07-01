@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/voice_gateway"]
+members = ["crates/protocol", "crates/voice_gateway"]
 resolver = "2"
 
 [workspace.package]

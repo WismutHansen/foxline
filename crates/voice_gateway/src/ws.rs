@@ -14,6 +14,8 @@ use tokio::time::{self, Duration};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
+use foxline_protocol::{ClientControl, ServerEvent};
+
 use crate::{
     avatar::AvatarActionRouter,
     brain::{BrainIdentity, BrainPool, PiRpcBrain},
@@ -24,7 +26,6 @@ use crate::{
     },
     loadout::LoadoutResolver,
     pipeline::{default_pipeline, LinearPipeline},
-    protocol::{ClientControl, ServerEvent},
     stt::{stt_trace_event, ParakeetSileroConfig, ParakeetSileroSttAdapter, SttAdapter},
     tools::{FrontendToolNegotiation, FrontendToolRouter},
     trace::{
