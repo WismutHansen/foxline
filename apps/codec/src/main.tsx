@@ -389,7 +389,6 @@ function useCodecDemo() {
   }
   function testCall() {
     const text = `${displaySpeakerName(supportCharacterRef.current, charactersRef.current)}, can you hear me?`;
-    setTranscript((t) => [...t, { speaker: 'Snake', text, at: now() }]);
     bridge.current?.trace('ui_test_call', { text });
     if (!bridge.current?.sendUtterance(text)) {
       setTranscript((t) => [...t, { speaker: 'System', text: 'Gateway is not connected; test message was not sent.', at: now() }]);
