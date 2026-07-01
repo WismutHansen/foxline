@@ -1308,6 +1308,31 @@ mod tests {
     }
 
     #[test]
+    fn assistant_delta_sent_to_frontend_matches_text_sent_to_tts() {
+        let pi_text = "Loud and clear, Snake. I'm right here. What's your status?";
+        let mut assistant = AssistantTextAccumulator::default();
+        let mut tts = SentenceBuffer::default();
+        let mut frontend_text = String::new();
+        let mut tts_text = Vec::new();
+
+        for incoming in [
+            "Loud and clear, Snake. I",
+            "'m right here. What's your status?",
+        ] {
+            if let Some(delta) = assistant.push(incoming) {
+                frontend_text.push_str(&delta);
+                tts_text.extend(tts.push(&delta));
+            }
+        }
+        if let Some(tail) = tts.flush() {
+            tts_text.push(tail);
+        }
+
+        assert_eq!(frontend_text, pi_text);
+        assert_eq!(tts_text.join(" "), pi_text);
+    }
+
+    #[test]
     fn sentence_buffer_emits_sentence_sized_chunks_and_flushes_tail() {
         let mut buffer = SentenceBuffer::default();
 

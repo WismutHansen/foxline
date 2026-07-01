@@ -645,21 +645,17 @@ fn cumulative_suffix_delta<'a>(previous: &str, content: &'a str) -> &'a str {
     if content == previous {
         return "";
     }
-    let mut split = 0;
-    for ((prev_index, prev_ch), (content_index, content_ch)) in
-        previous.char_indices().zip(content.char_indices())
-    {
-        if prev_ch != content_ch {
-            break;
+    if let Some(delta) = content.strip_prefix(previous) {
+        return delta;
+    }
+    let previous_without_trailing_boundary =
+        previous.trim_end_matches(['.', '!', '?', ',', ';', ':']);
+    if previous_without_trailing_boundary.len() < previous.len() {
+        if let Some(delta) = content.strip_prefix(previous_without_trailing_boundary) {
+            return delta;
         }
-        split = prev_index + prev_ch.len_utf8();
-        debug_assert_eq!(split, content_index + content_ch.len_utf8());
     }
-    if split == 0 {
-        content
-    } else {
-        &content[split..]
-    }
+    content
 }
 
 fn resolve_workspace_path(workspace: &Path, path: &str) -> PathBuf {
@@ -871,6 +867,36 @@ mod tests {
             Frame::Brain(BrainFrame::TextDelta { text }) => assert_eq!(text, " out there."),
             frame => panic!("unexpected frame: {frame:?}"),
         }
+    }
+
+    #[test]
+    fn cumulative_content_replacement_does_not_swallow_shared_prefix() {
+        let session_id = SessionId::new();
+        let mut mapper = RpcFrameMapper::default();
+
+        let first = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","content":"Loud and clear, Snake. I'm right here."}}"#,
+            )
+            .unwrap();
+        let replacement = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","content":"L clear, Snake. I'm still on the frequency."}}"#,
+            )
+            .unwrap();
+
+        assert_eq!(first.len(), 1);
+        assert!(matches!(
+            &first[0].frame,
+            Frame::Brain(BrainFrame::TextDelta { text }) if text == "Loud and clear, Snake. I'm right here."
+        ));
+        assert_eq!(replacement.len(), 1);
+        assert!(matches!(
+            &replacement[0].frame,
+            Frame::Brain(BrainFrame::TextDelta { text }) if text == "L clear, Snake. I'm still on the frequency."
+        ));
     }
 
     #[test]
