@@ -135,6 +135,86 @@ function appendAssistantDelta(current: string, delta: string): string {
   return current + delta.slice(overlap);
 }
 
+function fuzzyScore(option: string, query: string): number {
+  const needle = query.trim().toLowerCase();
+  const haystack = option.toLowerCase();
+  if (!needle) return 0;
+  if (haystack === needle) return 10_000;
+  if (haystack.includes(needle)) return 5_000 - haystack.indexOf(needle);
+  let score = 0;
+  let cursor = 0;
+  for (const char of needle) {
+    const found = haystack.indexOf(char, cursor);
+    if (found < 0) return -1;
+    score += Math.max(1, 80 - (found - cursor));
+    cursor = found + 1;
+  }
+  return score;
+}
+
+function fuzzyFilter(options: string[], query: string) {
+  return options
+    .map((option, index) => ({ option, index, score: fuzzyScore(option, query) }))
+    .filter((entry) => entry.score >= 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((entry) => entry.option);
+}
+
+function ModelDropdown({ value, models, onChange }: { value: string; models: string[]; onChange: (model: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const options = useMemo(() => {
+    const unique = [...new Set([value, ...models].filter(Boolean))];
+    return fuzzyFilter(unique, query);
+  }, [models, query, value]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [open]);
+
+  function choose(model: string) {
+    onChange(model);
+    setOpen(false);
+    setQuery('');
+  }
+
+  return <div className="modelDropdown" ref={rootRef}>
+    <button className="modelDropdownButton" type="button" disabled={!models.length && !value} onClick={() => setOpen((next) => !next)} title={value || 'unknown'}>
+      <span>{value || 'unknown'}</span><span className="modelDropdownCaret">▾</span>
+    </button>
+    {open && <div className="modelDropdownMenu">
+      <input
+        className="modelDropdownSearch"
+        autoFocus
+        value={query}
+        placeholder="filter models"
+        onChange={(event) => setQuery(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') setOpen(false);
+          if (event.key === 'Enter' && options[0]) choose(options[0]);
+        }}
+      />
+      <div className="modelDropdownList" role="listbox" aria-label="Pi models">
+        {options.map((model) => <button
+          key={model}
+          type="button"
+          role="option"
+          aria-selected={model === value}
+          className={model === value ? 'selected' : ''}
+          onClick={() => choose(model)}
+        >{model}</button>)}
+        {!options.length && <div className="modelDropdownEmpty">no matches</div>}
+      </div>
+    </div>}
+  </div>;
+}
+
 function faceFor(set: FaceSet, level: number, active: boolean, tick: number) {
   if (tick % 240 > 232 && set.eyes1) return set.eyes1;
   if (!active || level < 0.08) return set.base;
@@ -703,17 +783,7 @@ function App() {
             <span className="statusLabel">phase</span>
             <span className="statusValue">{status.toLowerCase()}</span>
             <span className="statusLabel">model</span>
-            <select
-              className="statusSelect"
-              value={codec.llmModel || ''}
-              title={codec.llmModel || 'unknown'}
-              disabled={!codec.availableModels.length}
-              onChange={(event) => codec.switchModel(event.currentTarget.value)}
-            >
-              {codec.llmModel && !codec.availableModels.includes(codec.llmModel) && <option value={codec.llmModel}>{codec.llmModel}</option>}
-              {!codec.llmModel && <option value="">unknown</option>}
-              {codec.availableModels.map((model) => <option key={model} value={model}>{model}</option>)}
-            </select>
+            <ModelDropdown value={codec.llmModel || ''} models={codec.availableModels} onChange={codec.switchModel} />
           </div>
           <div className="statusGroup">
             <LevelBar label="mic" level={codec.snakeLevel} />
