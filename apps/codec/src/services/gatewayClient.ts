@@ -1,4 +1,4 @@
-import agentsManifest from '../../agents/manifest.json';
+import agentsManifest from '../../../../agents/manifest.json';
 import { StreamingAudioPlayer, VoiceGatewayClient, type VoiceCharacterInfo, type VoiceClientEvent, type VoicePhase } from '@foxline/voice-client';
 
 export { StreamingAudioPlayer };
@@ -7,10 +7,10 @@ export type CodecCharacterInfo = VoiceCharacterInfo;
 export type BridgeEvent = VoiceClientEvent;
 
 const codecCharacters = (agentsManifest.characters as CodecCharacterInfo[]).filter((character) => character.enabled !== false);
-const agentWorkspaceModules = import.meta.glob<string>('../../agents/*/SYSTEM.md', { eager: true, query: '?raw', import: 'default' });
+const agentWorkspaceModules = import.meta.glob<string>('../../../../agents/*/SYSTEM.md', { eager: true, query: '?raw', import: 'default' });
 const agentWorkspaceIds = new Set(
   Object.keys(agentWorkspaceModules)
-    .map((path) => path.match(/\.\.\/\.\.\/agents\/([^/]+)\/SYSTEM\.md$/)?.[1])
+    .map((path) => path.match(/\.\.\/\.\.\/\.\.\/\.\.\/agents\/([^/]+)\/SYSTEM\.md$/)?.[1])
     .filter(Boolean) as string[],
 );
 

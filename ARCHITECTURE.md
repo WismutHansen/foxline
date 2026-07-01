@@ -1,25 +1,16 @@
 # Foxline architecture
 
-Foxline follows PiBot's low-latency worker architecture rather than HTTP microservices.
+Foxline follows PiBot's low-latency worker architecture rather than HTTP microservices. The Rust Voice Gateway is the sole gateway and Brain path; the legacy TypeScript bridge has been retired.
 
 ```text
-browser UI
-  -> server/bridge.ts
-      -> pi-rpc process
-      -> Qwen3-TTS worker process
-      -> parakeet.cpp + Silero STT worker process/service
-```
-
-During the Rust Voice Gateway migration, `server/bridge.ts` remains the latency and behavior baseline. The Rust gateway lives in `crates/voice_gateway` and is introduced behind a separate WebSocket endpoint until benchmark parity is proven.
-
-```text
-frontend client
-  -> foxline-voice-gateway WebSocket
-      -> canonical frame pipeline
-      -> Pi RPC Brain adapter
-      -> STT adapter
-      -> TTS adapter
-      -> frontend tool/avatar action routers
+Frontend Skin (apps/codec, future apps/overlayz)
+  -> @foxline/voice-client
+      -> foxline-voice-gateway WebSocket
+          -> canonical frame pipeline
+          -> Pi RPC Brain adapter
+          -> STT adapter
+          -> TTS adapter
+          -> frontend tool/avatar action routers
 ```
 
 The gateway never calls LLM servers directly. Pi is always the Brain path and owns model/provider access, tools, skills, extensions, prompt templates, and session behavior.
@@ -195,8 +186,11 @@ Important models:
 
 ## Repo layout
 
-- `server/` - app runtime server.
-- `crates/voice_gateway/` - Rust Voice Gateway runtime core and WebSocket protocol.
+- `crates/protocol/` - Rust source of truth for Foxline Gateway protocol types.
+- `crates/voice_gateway/` - Rust Voice Gateway runtime core.
+- `packages/protocol/` - generated TypeScript protocol package (`@foxline/protocol`).
+- `packages/voice-client/` - browser-clean TypeScript Client Core (`@foxline/voice-client`).
+- `apps/codec/` - Codec Frontend Skin (web app today, Tauri target later).
 - `services/` - worker/service adapters that are runtime-adjacent.
 - `tools/` - install-time/extraction utilities only.
 - `scripts/` - user-facing shell entrypoints.

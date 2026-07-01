@@ -13,8 +13,8 @@ type CodecCharacter = string;
 
 type AvatarRole = 'base' | 'mouth_1' | 'mouth_2' | 'eyes_1' | 'eyes_2';
 type AvatarFile = { modulePath: string; url: string };
-const avatarModules = import.meta.glob<string>('../agents/*/assets/avatar/*/*.png', { eager: true, import: 'default' });
-const personaPortraitModules = import.meta.glob<string>('../personas/*/codec/portrait.png', { eager: true, import: 'default' });
+const avatarModules = import.meta.glob<string>('../../../agents/*/assets/avatar/*/*.png', { eager: true, import: 'default' });
+const personaPortraitModules = import.meta.glob<string>('../../../personas/*/codec/portrait.png', { eager: true, import: 'default' });
 
 function extractFaceId(modulePath: string): string | undefined {
   const m = modulePath.match(/__id_([0-9a-fA-F]+)__/);
@@ -60,7 +60,7 @@ function pickPrimaryFaceId(files: AvatarFile[]): string | undefined {
 function buildAvatarFaceMap() {
   const grouped = new Map<string, Map<string, AvatarFile[]>>();
   for (const [modulePath, url] of Object.entries(avatarModules)) {
-    const m = modulePath.match(/\.\.\/agents\/([^/]+)\/assets\/avatar\/([^/]+)\/[^/]+\.png$/);
+    const m = modulePath.match(/\.\.\/\.\.\/\.\.\/agents\/([^/]+)\/assets\/avatar\/([^/]+)\/[^/]+\.png$/);
     if (!m) continue;
     const [, characterId, avatarId] = m;
     if (!grouped.has(characterId)) grouped.set(characterId, new Map());
@@ -85,7 +85,7 @@ function buildAvatarFaceMap() {
     out.set(characterId, faceMap);
   }
   for (const [modulePath, url] of Object.entries(personaPortraitModules)) {
-    const m = modulePath.match(/\.\.\/personas\/([^/]+)\/codec\/portrait\.png$/);
+    const m = modulePath.match(/\.\.\/\.\.\/\.\.\/personas\/([^/]+)\/codec\/portrait\.png$/);
     if (!m) continue;
     const [, personaId] = m;
     const faceMap = out.get(personaId) || new Map<string, FaceSet>();

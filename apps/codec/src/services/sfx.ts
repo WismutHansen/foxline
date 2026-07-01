@@ -7,11 +7,11 @@
 // the mgs_pc set is the lower-fidelity fallback converted from the PC port's
 // pre-rendered effects (see PC_SFX_FALLBACK in tools/install_user_mgs_assets.py).
 const pcSfxModules = import.meta.glob<string>(
-  '../../assets/generated/mgs_pc/sfx/builtin/*_{codec_call,codec_tune,codec_noise,radio_receive,radio_select,radio_cancel,radio_cursor,radio_window_open,radio_window_close,alert_bikkuri,cursor,item_select}.wav',
+  '../../../../assets/generated/mgs_pc/sfx/builtin/*_{codec_call,codec_tune,codec_noise,radio_receive,radio_select,radio_cancel,radio_cursor,radio_window_open,radio_window_close,alert_bikkuri,cursor,item_select}.wav',
   { eager: true, import: 'default' },
 );
 const psxSfxModules = import.meta.glob<string>(
-  '../../assets/generated/mgs/disc_1/sfx/builtin/*_{codec_call,codec_tune,codec_noise,radio_receive,radio_select,radio_cancel,radio_cursor,radio_window_open,radio_window_close,alert_bikkuri,cursor,item_select}.wav',
+  '../../../../assets/generated/mgs/disc_1/sfx/builtin/*_{codec_call,codec_tune,codec_noise,radio_receive,radio_select,radio_cancel,radio_cursor,radio_window_open,radio_window_close,alert_bikkuri,cursor,item_select}.wav',
   { eager: true, import: 'default' },
 );
 

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Moved the Codec web frontend from the repository root into `apps/codec`, added `@foxline/codec`, and updated root scripts so `bun run dev/build/typecheck/preview` continue to target Codec through the workspace layout required by ADR 0005.
 - Extracted `@foxline/voice-client` (`packages/voice-client`) as the browser-clean TypeScript Client Core for WebSocket lifecycle, gateway session control, binary PCM receive/send, reconnect, and streaming audio playback. Codec now uses a thin adapter over the shared Client Core while keeping its UI event surface stable.
 - Added `@foxline/protocol` (`packages/protocol`) with TypeScript protocol types generated from the Rust `foxline-protocol` crate via `ts-rs`; added `just protocol-generate` and `just protocol-typecheck`.
 - Extracted the Rust Voice Gateway WebSocket protocol types into a dedicated `foxline-protocol` crate (`crates/protocol`) and made `foxline-voice-gateway` depend on it, establishing the Rust source of truth required by ADR 0005 before TypeScript code generation.
