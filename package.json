@@ -13,9 +13,12 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "protocol:generate": "cd packages/protocol && bun run generate",
-    "protocol:typecheck": "cd packages/protocol && bun run typecheck"
+    "protocol:typecheck": "cd packages/protocol && bun run typecheck",
+    "voice-client:typecheck": "cd packages/voice-client && bun run typecheck"
   },
   "dependencies": {
+    "@foxline/protocol": "workspace:*",
+    "@foxline/voice-client": "workspace:*",
     "react": "latest",
     "react-dom": "latest",
     "react-markdown": "^10.1.0",

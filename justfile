@@ -41,6 +41,9 @@ protocol-generate:
 protocol-typecheck:
     bun run protocol:typecheck
 
+voice-client-typecheck:
+    bun run voice-client:typecheck
+
 gateway *args:
     cargo run -p foxline-voice-gateway -- {{args}}
 

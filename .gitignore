@@ -10,6 +10,7 @@ dist/
 .vite/
 .pi/
 *.tsbuildinfo
+crates/protocol/bindings/
 .env*
 !.env.example
 
