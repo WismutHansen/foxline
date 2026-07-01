@@ -599,6 +599,19 @@ function transcriptToVerbatimText(lines: TranscriptLine[]) {
     .join('\n\n');
 }
 
+function transcriptMetadataText(codec: ReturnType<typeof useCodecDemo>) {
+  const character = codec.characters.find((entry) => entry.id === codec.supportCharacter);
+  return [
+    'FOXLINE CODEC TRANSCRIPT',
+    `copied_at: ${new Date().toISOString()}`,
+    `model: ${codec.llmModel || 'unknown'}`,
+    `support_character: ${codec.supportCharacter}`,
+    `support_speaker: ${displaySpeakerName(codec.supportCharacter, codec.characters)}`,
+    `support_frequency: ${character?.frequency || 'unknown'}`,
+    `phase: ${codec.phase}`,
+  ].join('\n');
+}
+
 function App() {
   const codec = useCodecDemo();
   const [tick, setTick] = useState(0);
@@ -674,14 +687,15 @@ function App() {
   }, [codec.transcript, codec.sttStatus, copyNotice]);
 
   const copyTranscript = async () => {
-    const text = transcriptToVerbatimText(dialogLines);
-    if (!text) {
+    const transcript = transcriptToVerbatimText(dialogLines);
+    const text = [transcriptMetadataText(codec), transcript].filter(Boolean).join('\n\n');
+    if (!transcript) {
       setCopyNotice('No dialogue transcript to copy.');
       return;
     }
     try {
       await navigator.clipboard.writeText(text);
-      setCopyNotice(`Copied ${dialogLines.length} transcript ${dialogLines.length === 1 ? 'line' : 'lines'} verbatim.`);
+      setCopyNotice(`Copied ${dialogLines.length} transcript ${dialogLines.length === 1 ? 'line' : 'lines'} with metadata.`);
     } catch (error) {
       setCopyNotice(`Copy failed: ${error instanceof Error ? error.message : String(error)}`);
     }

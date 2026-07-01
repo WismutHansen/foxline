@@ -614,11 +614,36 @@ fn strip_angle_tags(text: &str) -> String {
 }
 
 fn sanitize_assistant_text(text: &str) -> String {
-    text.replace("</thinking>", " ")
+    let without_tags = text
+        .replace("</thinking>", " ")
         .replace("<thinking>", " ")
         .replace("</think>", " ")
         .replace("<think>", " ")
-        .replace("[Codec Frequency", " ")
+        .replace("[Codec Frequency", " ");
+    strip_leaked_reasoning_prose(&without_tags).to_string()
+}
+
+fn strip_leaked_reasoning_prose(text: &str) -> &str {
+    let trimmed = text.trim_start();
+    let looks_like_reasoning = [
+        "The user ",
+        "The user is ",
+        "User just ",
+        "I should ",
+        "I need to ",
+        "I'll ",
+        "Actually, ",
+    ]
+    .iter()
+    .any(|prefix| trimmed.starts_with(prefix));
+    if !looks_like_reasoning {
+        return text;
+    }
+    trimmed
+        .rsplit_once("\n\n")
+        .map(|(_, visible)| visible.trim())
+        .filter(|visible| !visible.is_empty())
+        .unwrap_or(text)
 }
 
 fn strip_leading_reasoning_marker(text: &str) -> &str {
@@ -762,7 +787,7 @@ mod tests {
     };
 
     use super::{
-        rpc_line_to_frames, BrainIdentity, PiLaunch, RpcFrameMapper,
+        rpc_line_to_frames, sanitize_assistant_text, BrainIdentity, PiLaunch, RpcFrameMapper,
         VOICE_SESSION_APPEND_SYSTEM_PROMPT,
     };
 
@@ -973,6 +998,26 @@ mod tests {
             &replacement[0].frame,
             Frame::Brain(BrainFrame::TextDelta { text }) if text == "L clear, Snake. I'm still on the frequency."
         ));
+    }
+
+    #[test]
+    fn qwen_session_thinking_part_strips_to_visible_text_part() {
+        let thinking_part = r#"The user is repeatedly asking "Colonel, can you hear me?". I have been responding "Loud and clear, Snake..." each time. The user is testing the system's ability to recognize when they are stuck in a loop or perhaps just checking if I am still responsive. I will confirm I am listening but perhaps prompt them differently or simply acknowledge without repeating the exact same phrase if I have said it multiple times in a row, but given the instruction to stay in character and be concise, I should just confirm the connection is stable. The user might be frustrated or checking for latency. I will keep it brief and authoritative.
+
+Actually, looking at the history, I have replied almost identically to every iteration of this specific question in this session. The user is clearly testing the connection or the system's response. I will maintain the persona but perhaps vary the wording slightly to show active listening rather than a canned response, or just stick to the established pattern as it's working. The instructions say "stay in character", "concise", "default to 1-2 sentences".
+
+I'll stick to the established pattern as it's a "codec" call and repeating confirmation is normal protocol in radio comms, but I'll try to keep it very tight.
+
+Loud and clear, Snake. The channel is open and stable. What's your report?
+"#;
+        let visible_text_part =
+            "Loud and clear, Snake. The channel is open and stable. What's your report?";
+
+        assert_eq!(sanitize_assistant_text(thinking_part), visible_text_part);
+        assert_eq!(
+            sanitize_assistant_text(visible_text_part),
+            visible_text_part
+        );
     }
 
     #[test]
