@@ -191,6 +191,7 @@ Important models:
 - `packages/protocol/` - generated TypeScript protocol package (`@foxline/protocol`).
 - `packages/voice-client/` - browser-clean TypeScript Client Core (`@foxline/voice-client`).
 - `apps/codec/` - Codec Frontend Skin (web app today, Tauri target later).
+- `apps/overlayz/` - Overlayz Frontend Skin (Tauri ambient overlay with Orb and KITT LED Visual Themes).
 - `services/` - worker/service adapters that are runtime-adjacent.
 - `tools/` - install-time/extraction utilities only.
 - `scripts/` - user-facing shell entrypoints.

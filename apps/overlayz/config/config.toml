@@ -1,0 +1,65 @@
+[foxline]
+url = "ws://127.0.0.1:8780"
+agent = "campbell"
+persona = "campbell"
+workspace = "agents/campbell"
+loadout = "default"
+
+[kitt]
+name = "K.I.T.T."
+system_prompt = "You are K.I.T.T., the Knight Industries Two Thousand. You are a sophisticated AI in a Trans Am. Be helpful, professional, and occasionally witty like the original character. Always respond in plain text only - never use markdown, formatting, asterisks, or any other markup. Keep responses concise and conversational as if speaking aloud."
+voice = "am_michael"
+speed = 1.0
+history_enabled = true
+
+[orb]
+name = "Orb"
+system_prompt = "You are Orb, a modern AI assistant. Be friendly, helpful, and conversational."
+voice = "af_sky"
+speed = 1.0
+history_enabled = true
+
+# Orb theme configuration - choose between "custom" or "tinty"
+[orb.theme]
+provider = "custom"
+# For custom provider: specify main colors (gradients are auto-generated)
+listening = "#CADCFC"  # Blue for listening/idle
+thinking = "#C8A2FF"   # Purple for thinking/processing
+talking = "#A2FFB8"    # Green for talking/speaking
+
+# For tinty provider with single keys (gradients auto-generated):
+# provider = "tinty"
+# base16_dir = "~/.config/tinted-theming/tinty/base16"
+# listening_key = "base0D"  # Blue
+# thinking_key = "base0E"   # Purple
+# talking_key = "base0B"    # Green
+
+# For tinty provider with triple keys (exact colors, no gradients):
+# provider = "tinty"
+# base16_dir = "~/.config/tinted-theming/tinty/base16"
+# listening_keys = ["base0D", "base03", "base04"]
+# thinking_keys = ["base0E", "base03", "base04"]
+# talking_keys = ["base0B", "base03", "base04"]
+
+[keyboard]
+switch_ui = "Tab"
+clear_history = "Escape"
+toggle_draggable = "Meta"
+
+[global_shortcuts.toggle_audio]
+modifiers = ["CommandOrControl", "Alt"]
+key = "A"
+
+[global_shortcuts.show_kitt]
+modifiers = ["CommandOrControl", "Alt"]
+key = "K"
+
+[global_shortcuts.show_orb]
+modifiers = ["CommandOrControl", "Alt"]
+key = "O"
+
+[global_shortcuts.show_last_agent]
+modifiers = ["CommandOrControl", "Alt"]
+key = "L"
+
+[storage]

@@ -14,6 +14,9 @@
     "typecheck": "cd apps/codec && bun run typecheck",
     "protocol:generate": "cd packages/protocol && bun run generate",
     "protocol:typecheck": "cd packages/protocol && bun run typecheck",
-    "voice-client:typecheck": "cd packages/voice-client && bun run typecheck"
+    "voice-client:typecheck": "cd packages/voice-client && bun run typecheck",
+    "overlayz:typecheck": "cd apps/overlayz && bun run typecheck",
+    "overlayz:build": "cd apps/overlayz && bun run build:frontend",
+    "overlayz:tauri-check": "cd apps/overlayz/src-tauri && cargo check"
   }
 }

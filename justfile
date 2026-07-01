@@ -44,6 +44,15 @@ protocol-typecheck:
 voice-client-typecheck:
     bun run voice-client:typecheck
 
+overlayz-typecheck:
+    bun run overlayz:typecheck
+
+overlayz-build:
+    bun run overlayz:build
+
+overlayz-tauri-check:
+    bun run overlayz:tauri-check
+
 gateway *args:
     cargo run -p foxline-voice-gateway -- {{args}}
 

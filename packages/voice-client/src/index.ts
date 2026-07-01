@@ -175,6 +175,125 @@ export class StreamingAudioPlayer {
   }
 }
 
+export type MicrophoneAudioFrame = {
+  chunksSent: number;
+  samples: number;
+  level: number;
+  pcm16: ArrayBuffer;
+};
+
+export class MicrophonePcmStreamer {
+  private audioContext?: AudioContext;
+  private stream?: MediaStream;
+  private worklet?: AudioWorkletNode;
+  private source?: MediaStreamAudioSourceNode;
+  private analyser?: AnalyserNode;
+  private listening = false;
+  private pendingSamples: number[] = [];
+  private chunksSent = 0;
+  private readonly sendChunkSamples: number;
+  private readonly sampleRate: number;
+  private onLevelCb?: (level: number) => void;
+  private onAudioFrameCb?: (data: MicrophoneAudioFrame) => void;
+
+  constructor(options: { sampleRate?: number; sendChunkSamples?: number } = {}) {
+    this.sampleRate = options.sampleRate ?? 24000;
+    this.sendChunkSamples = options.sendChunkSamples ?? 2048;
+  }
+
+  async start() {
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        sampleRate: this.sampleRate,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    this.audioContext = new AudioContext({ sampleRate: this.sampleRate });
+    if (this.audioContext.state === 'suspended') await this.audioContext.resume();
+    this.analyser = this.audioContext.createAnalyser();
+    this.analyser.fftSize = 256;
+    this.analyser.smoothingTimeConstant = 0.8;
+    await this.audioContext.audioWorklet.addModule(
+      URL.createObjectURL(
+        new Blob(
+          [
+            `
+        class AudioProcessor extends AudioWorkletProcessor {
+          process(inputs) { const input = inputs[0]; if (input.length > 0) this.port.postMessage(input[0]); return true; }
+        }
+        registerProcessor('foxline-audio-processor', AudioProcessor);
+      `,
+          ],
+          { type: 'application/javascript' },
+        ),
+      ),
+    );
+    this.source = this.audioContext.createMediaStreamSource(this.stream);
+    this.worklet = new AudioWorkletNode(this.audioContext, 'foxline-audio-processor');
+    this.listening = true;
+    this.worklet.port.onmessage = (event) => {
+      if (!this.listening) return;
+      const samples = event.data as Float32Array;
+      let sum = 0;
+      for (const v of samples) sum += v * v;
+      const level = Math.min(1, Math.sqrt(sum / samples.length) * 14);
+      this.onLevelCb?.(level);
+      this.pendingSamples.push(...samples);
+      if (this.pendingSamples.length < this.sendChunkSamples) return;
+      const out = new Float32Array(this.pendingSamples.splice(0, this.sendChunkSamples));
+      this.chunksSent += 1;
+      this.onAudioFrameCb?.({ chunksSent: this.chunksSent, samples: out.length, level, pcm16: float32ToPcm16(out) });
+    };
+    this.source.connect(this.analyser);
+    this.analyser.connect(this.worklet);
+    const silent = this.audioContext.createGain();
+    silent.gain.value = 0.00001;
+    this.worklet.connect(silent);
+    silent.connect(this.audioContext.destination);
+  }
+
+  stop() {
+    this.listening = false;
+    this.pendingSamples = [];
+    this.worklet?.disconnect();
+    this.analyser?.disconnect();
+    this.source?.disconnect();
+    this.stream?.getTracks().forEach((track) => track.stop());
+    if (this.audioContext?.state !== 'closed') void this.audioContext?.close();
+  }
+
+  getInputVolume(): number {
+    if (!this.analyser || !this.listening) return 0;
+    const data = new Uint8Array(this.analyser.frequencyBinCount);
+    this.analyser.getByteFrequencyData(data);
+    let sum = 0;
+    for (let i = 0; i < data.length; i += 1) sum += data[i];
+    const volume = sum / data.length / 255;
+    return volume < 0.01 ? 0 : volume;
+  }
+
+  onLevel(cb: (level: number) => void) {
+    this.onLevelCb = cb;
+  }
+
+  onAudioFrame(cb: (data: MicrophoneAudioFrame) => void) {
+    this.onAudioFrameCb = cb;
+  }
+}
+
+export function float32ToPcm16(samples: Float32Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(samples.length * 2);
+  const view = new DataView(buffer);
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+  }
+  return buffer;
+}
+
 export class VoiceGatewayClient {
   private ws?: WebSocket;
   private handlers = new Set<(event: VoiceClientEvent) => void>();
@@ -265,6 +384,14 @@ export class VoiceGatewayClient {
   onEvent(handler: (event: VoiceClientEvent) => void) {
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);
+  }
+
+  disconnect() {
+    window.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+    const ws = this.ws;
+    this.ws = undefined;
+    ws?.close();
   }
 
   sendUtterance(_text: string) {
