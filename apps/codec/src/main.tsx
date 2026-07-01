@@ -156,6 +156,7 @@ function useCodecDemo() {
   const [liveCaption, setLiveCaption] = useState('');
   const [sttStatus, setSttStatus] = useState('PTT idle');
   const [llmModel, setLlmModel] = useState('');
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [pttActive, setPttActive] = useState(false);
   const [showStatus, setShowStatus] = useState(false);
   const gatewayMic = useRef<MicrophonePcmStreamer | undefined>(undefined);
@@ -207,6 +208,14 @@ function useCodecDemo() {
           autoResumeListeningAfterSwitch.current = false;
           void startListening(false);
         }
+      }
+      if (event.type === 'models_available') {
+        setAvailableModels(event.models);
+        if (event.current) setLlmModel(event.current);
+      }
+      if (event.type === 'model_changed') {
+        setLlmModel(event.model);
+        setTranscript((t) => [...t, { speaker: 'System', text: `Pi model switched to ${event.model}.`, at: now() }]);
       }
       if (event.type === 'phase') setPhase(event.phase);
       if (event.type === 'audio_reset') {
@@ -395,6 +404,19 @@ function useCodecDemo() {
     }
   }
   function toggleStatus() { setShowStatus((x) => !x); }
+  function switchModel(model: string) {
+    activeTurnId.current = null;
+    player.current?.stop();
+    assistantText.current = '';
+    assistantLineIndex.current = null;
+    setAssistantResponse('Switching model...');
+    setLiveCaption('');
+    setLlmModel(model);
+    setTranscript((t) => [...t, { speaker: 'System', text: `Switching Pi model to ${model}.`, at: now() }]);
+    if (!bridge.current?.switchModel(model)) {
+      setTranscript((t) => [...t, { speaker: 'System', text: 'Gateway is not connected; model switch was queued for reconnect.', at: now() }]);
+    }
+  }
   function switchCharacter(character: string) {
     activeTurnId.current = null;
     const wasListening = phaseRef.current === 'listening';
@@ -408,7 +430,7 @@ function useCodecDemo() {
     bridge.current?.switchCharacter(character);
   }
 
-  return { phase, transcript, assistantResponse, supportCharacter, characters, snakeLevel, campbellLevel, error, connected, liveCaption, sttStatus, llmModel, pttActive, showStatus, activateColonel, startPushToTalk, stopTalking, interrupt, newCall, testCall, toggleStatus, switchCharacter };
+  return { phase, transcript, assistantResponse, supportCharacter, characters, snakeLevel, campbellLevel, error, connected, liveCaption, sttStatus, llmModel, availableModels, pttActive, showStatus, activateColonel, startPushToTalk, stopTalking, interrupt, newCall, testCall, toggleStatus, switchCharacter, switchModel };
 }
 
 function normalizeMarkdownForDisplay(text: string) {
@@ -681,7 +703,17 @@ function App() {
             <span className="statusLabel">phase</span>
             <span className="statusValue">{status.toLowerCase()}</span>
             <span className="statusLabel">model</span>
-            <span className="statusValue" title={codec.llmModel || 'unknown'}>{codec.llmModel || 'unknown'}</span>
+            <select
+              className="statusSelect"
+              value={codec.llmModel || ''}
+              title={codec.llmModel || 'unknown'}
+              disabled={!codec.availableModels.length}
+              onChange={(event) => codec.switchModel(event.currentTarget.value)}
+            >
+              {codec.llmModel && !codec.availableModels.includes(codec.llmModel) && <option value={codec.llmModel}>{codec.llmModel}</option>}
+              {!codec.llmModel && <option value="">unknown</option>}
+              {codec.availableModels.map((model) => <option key={model} value={model}>{model}</option>)}
+            </select>
           </div>
           <div className="statusGroup">
             <LevelBar label="mic" level={codec.snakeLevel} />

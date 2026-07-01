@@ -23,6 +23,8 @@ export type VoiceClientEvent =
   | { type: 'turn_started' | 'turn_completed'; turnId: string; character?: string | null }
   | { type: 'audio_reset'; reason?: string | null }
   | { type: 'session'; sessionFile?: string; sessionId?: string; sessionName?: string; model?: string | null }
+  | { type: 'models_available'; models: string[]; current?: string | null }
+  | { type: 'model_changed'; model: string }
   | { type: 'disconnected' }
   | { type: 'error'; message: string };
 
@@ -33,6 +35,7 @@ export type VoiceGatewayClientOptions = {
   workspaceOverride?: string;
   loadout?: string;
   persona?: string;
+  model?: string;
   characters?: VoiceCharacterInfo[];
   agentWorkspaceIds?: Set<string> | string[];
   debugTraces?: boolean;
@@ -306,6 +309,7 @@ export class VoiceGatewayClient {
   private readonly workspaceOverride: string;
   private readonly loadout: string;
   private persona: string;
+  private model: string;
   private readonly characters: VoiceCharacterInfo[];
   private readonly agentWorkspaceIds: Set<string>;
   private readonly debugTraces: boolean;
@@ -325,6 +329,7 @@ export class VoiceGatewayClient {
     this.workspaceOverride = options.workspaceOverride || '';
     this.loadout = options.loadout || 'default';
     this.persona = options.persona || this.agent;
+    this.model = options.model || '';
     this.characters = options.characters || [];
     this.agentWorkspaceIds = new Set(options.agentWorkspaceIds || []);
     this.debugTraces = options.debugTraces ?? false;
@@ -369,6 +374,7 @@ export class VoiceGatewayClient {
         persona: this.persona,
         workspace: this.workspace(),
         loadout: this.loadout,
+        model: this.model || null,
       });
     };
     ws.onmessage = async (e) => this.handleMessage(e);
@@ -429,6 +435,15 @@ export class VoiceGatewayClient {
     this.switchPersona(character);
   }
 
+  switchModel(model: string) {
+    const trimmed = model.trim();
+    if (!trimmed) return false;
+    this.model = trimmed;
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    this.sendControl({ type: 'switch_model', model: trimmed });
+    return true;
+  }
+
   trace(_event: string, _data?: Record<string, unknown>) {}
 
   private async handleMessage(e: MessageEvent) {
@@ -444,6 +459,12 @@ export class VoiceGatewayClient {
       this.sessionId = event.session_id;
       this.emit({ type: 'ready', character: this.persona, characters: this.characters, model: event.model });
       this.emit({ type: 'session', sessionId: event.session_id, sessionName: `gateway:${this.agent}:${this.persona}`, model: event.model });
+    } else if (event.type === 'models_available') {
+      this.emit({ type: 'models_available', models: event.models, current: event.current });
+    } else if (event.type === 'model_changed') {
+      this.model = event.model;
+      this.emit({ type: 'model_changed', model: event.model });
+      this.emit({ type: 'session', sessionId: this.sessionId || undefined, sessionName: `gateway:${this.agent}:${this.persona}`, model: event.model });
     } else if (event.type === 'session_ended') {
       this.emit({ type: 'phase', phase: 'idle' });
     } else if (event.type === 'phase') {

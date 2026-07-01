@@ -16,6 +16,7 @@ pub enum ClientControl {
         workspace: String,
         loadout: Option<String>,
         persona: Option<String>,
+        model: Option<String>,
     },
     EndSession,
     VadHint {
@@ -24,6 +25,9 @@ pub enum ClientControl {
     },
     TextUtterance {
         text: String,
+    },
+    SwitchModel {
+        model: String,
     },
     Interrupt,
     FrontendToolResult {
@@ -60,6 +64,13 @@ pub enum ServerEvent {
     SessionStarted {
         session_id: String,
         model: Option<String>,
+    },
+    ModelsAvailable {
+        models: Vec<String>,
+        current: Option<String>,
+    },
+    ModelChanged {
+        model: String,
     },
     SessionEnded,
     Phase {

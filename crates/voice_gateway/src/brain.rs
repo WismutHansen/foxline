@@ -18,7 +18,7 @@ use tokio::{
 
 use crate::{
     config::BrainConfig,
-    frame::{BrainFrame, Frame, FrameEnvelope, SessionId},
+    frame::{BrainFrame, Frame, FrameEnvelope, MetricsFrame, SessionId},
     loadout::ResolvedLoadout,
 };
 
@@ -36,6 +36,7 @@ pub struct BrainIdentity {
     pub agent: String,
     pub workspace: PathBuf,
     pub loadout: String,
+    pub model: Option<String>,
     pub frontend_capability_hash: String,
 }
 
@@ -44,12 +45,14 @@ impl BrainIdentity {
         agent: impl Into<String>,
         workspace: impl Into<PathBuf>,
         loadout: impl Into<String>,
+        model: Option<String>,
         frontend_capability_profile: &Value,
     ) -> Self {
         Self {
             agent: agent.into(),
             workspace: workspace.into(),
             loadout: loadout.into(),
+            model,
             frontend_capability_hash: stable_value_hash(frontend_capability_profile),
         }
     }
@@ -352,6 +355,20 @@ impl PiRpcBrain {
         self.send(json!({ "type": "abort" })).await
     }
 
+    pub async fn set_model(&mut self, model: &str) -> Result<()> {
+        self.start().await?;
+        self.last_used = Instant::now();
+        let (provider, model_id) = parse_provider_model(model);
+        self.send(json!({ "type": "set_model", "provider": provider, "modelId": model_id }))
+            .await
+    }
+
+    pub async fn get_available_models(&mut self) -> Result<()> {
+        self.start().await?;
+        self.last_used = Instant::now();
+        self.send(json!({ "type": "get_available_models" })).await
+    }
+
     pub async fn new_session(&mut self) -> Result<()> {
         self.start().await?;
         self.last_used = Instant::now();
@@ -498,6 +515,31 @@ impl RpcFrameMapper {
                     }),
                 ));
             }
+            "response"
+                if event.command.as_deref() == Some("set_model") && event.success == Some(true) =>
+            {
+                frames.push(FrameEnvelope::new(
+                    session_id.clone(),
+                    Frame::Metrics(MetricsFrame {
+                        event: "pi_model_changed".to_string(),
+                        elapsed_ms: None,
+                        data: event.data.unwrap_or_else(|| json!({})),
+                    }),
+                ));
+            }
+            "response"
+                if event.command.as_deref() == Some("get_available_models")
+                    && event.success == Some(true) =>
+            {
+                frames.push(FrameEnvelope::new(
+                    session_id.clone(),
+                    Frame::Metrics(MetricsFrame {
+                        event: "pi_available_models".to_string(),
+                        elapsed_ms: None,
+                        data: event.data.unwrap_or_else(|| json!({})),
+                    }),
+                ));
+            }
             "error" => frames.push(FrameEnvelope::new(
                 session_id.clone(),
                 Frame::Brain(BrainFrame::Error {
@@ -638,6 +680,13 @@ fn has_reasoning_only_payload(event: &AssistantMessageEvent) -> bool {
             .is_some_and(|text| !text.trim().is_empty())
 }
 
+fn parse_provider_model(model: &str) -> (&str, &str) {
+    model
+        .split_once('/')
+        .map(|(provider, model_id)| (provider, model_id))
+        .unwrap_or(("", model))
+}
+
 fn cumulative_suffix_delta<'a>(previous: &str, content: &'a str) -> &'a str {
     if previous.is_empty() {
         return content;
@@ -748,6 +797,7 @@ mod tests {
             "campbell",
             dir.path(),
             "default",
+            resolved.loadout.pi.model.clone(),
             &json!({ "tools": ["codec.display"] }),
         );
 
@@ -795,12 +845,38 @@ mod tests {
 
     #[test]
     fn identity_is_bound_to_agent_loadout_workspace_and_frontend_profile() {
-        let a = BrainIdentity::new("campbell", "/tmp/a", "default", &json!({ "tools": ["a"] }));
-        let b = BrainIdentity::new("campbell", "/tmp/a", "default", &json!({ "tools": ["b"] }));
-        let c = BrainIdentity::new("campbell", "/tmp/a", "field", &json!({ "tools": ["a"] }));
+        let a = BrainIdentity::new(
+            "campbell",
+            "/tmp/a",
+            "default",
+            Some("model-a".to_string()),
+            &json!({ "tools": ["a"] }),
+        );
+        let b = BrainIdentity::new(
+            "campbell",
+            "/tmp/a",
+            "default",
+            Some("model-a".to_string()),
+            &json!({ "tools": ["b"] }),
+        );
+        let c = BrainIdentity::new(
+            "campbell",
+            "/tmp/a",
+            "field",
+            Some("model-a".to_string()),
+            &json!({ "tools": ["a"] }),
+        );
+        let d = BrainIdentity::new(
+            "campbell",
+            "/tmp/a",
+            "default",
+            Some("model-b".to_string()),
+            &json!({ "tools": ["a"] }),
+        );
 
         assert_ne!(a, b);
         assert_ne!(a, c);
+        assert_ne!(a, d);
         assert!(a
             .session_name()
             .starts_with("foxline-voice-campbell-default-"));
@@ -896,6 +972,40 @@ mod tests {
         assert!(matches!(
             &replacement[0].frame,
             Frame::Brain(BrainFrame::TextDelta { text }) if text == "L clear, Snake. I'm still on the frequency."
+        ));
+    }
+
+    #[test]
+    fn maps_pi_rpc_model_responses_to_metrics_frames() {
+        let session_id = SessionId::new();
+        let mut mapper = RpcFrameMapper::default();
+
+        let available = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"anthropic","id":"claude-sonnet-4"},{"provider":"LM-Studio","id":"gemma-4-26b-a4b-it"}]}}"#,
+            )
+            .unwrap();
+        let switched = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"response","command":"set_model","success":true,"data":{"provider":"anthropic","id":"claude-sonnet-4"}}"#,
+            )
+            .unwrap();
+
+        assert_eq!(available.len(), 1);
+        assert!(matches!(
+            &available[0].frame,
+            Frame::Metrics(metrics)
+                if metrics.event == "pi_available_models"
+                    && metrics.data["models"][0]["provider"] == "anthropic"
+        ));
+        assert_eq!(switched.len(), 1);
+        assert!(matches!(
+            &switched[0].frame,
+            Frame::Metrics(metrics)
+                if metrics.event == "pi_model_changed"
+                    && metrics.data["id"] == "claude-sonnet-4"
         ));
     }
 

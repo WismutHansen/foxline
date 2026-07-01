@@ -138,6 +138,7 @@ async fn handle_connection(
                         workspace,
                         loadout,
                         persona,
+                        model,
                     } => {
                         let persona = persona.unwrap_or_else(|| agent.clone());
                         if config.frontend.require_capability_declaration && !capabilities_declared
@@ -151,7 +152,7 @@ async fn handle_connection(
                             continue;
                         }
                         let resolver = LoadoutResolver::new(config.loadouts.clone());
-                        let resolved = match resolver.resolve(&workspace, loadout.as_deref()) {
+                        let mut resolved = match resolver.resolve(&workspace, loadout.as_deref()) {
                             Ok(resolved) => resolved,
                             Err(err) => {
                                 send_error(&mut ws, "loadout_resolution_failed", &err.to_string())
@@ -159,10 +160,17 @@ async fn handle_connection(
                                 continue;
                             }
                         };
+                        let selected_model = model
+                            .as_ref()
+                            .map(|value| value.trim().to_string())
+                            .filter(|value| !value.is_empty())
+                            .or_else(|| resolved.loadout.pi.model.clone());
+                        resolved.loadout.pi.model = selected_model.clone();
                         let identity = BrainIdentity::new(
                             agent.clone(),
                             std::path::PathBuf::from(&workspace),
                             resolved.name.clone(),
+                            selected_model.clone(),
                             &frontend_capability_profile,
                         );
                         let tool_negotiation = FrontendToolNegotiation::negotiate(
@@ -268,10 +276,13 @@ async fn handle_connection(
                             &mut ws,
                             &ServerEvent::SessionStarted {
                                 session_id: session_id_text.clone(),
-                                model: resolved.loadout.pi.model.clone(),
+                                model: selected_model.clone(),
                             },
                         )
                         .await?;
+                        if let Some(brain) = brain.as_ref() {
+                            brain.lock().await.get_available_models().await?;
+                        }
                     }
                     ClientControl::EndSession => {
                         if let Some(stt) = stt.as_deref_mut() {
@@ -348,6 +359,19 @@ async fn handle_connection(
                             frame,
                         )
                         .await?;
+                    }
+                    ClientControl::SwitchModel { model } => {
+                        let model = model.trim().to_string();
+                        if model.is_empty() {
+                            send_error(&mut ws, "empty_model", "switch_model model is empty").await?;
+                            continue;
+                        }
+                        let Some(brain) = brain.as_ref() else {
+                            send_error(&mut ws, "session_required", "start_session before switch_model").await?;
+                            continue;
+                        };
+                        trace.event("model_switch_requested", json!({ "model": model }))?;
+                        brain.lock().await.set_model(&model).await?;
                     }
                     ClientControl::Interrupt => {
                         trace.event(EVENT_BARGE_IN_RECEIVED, json!({}))?;
@@ -617,6 +641,33 @@ fn is_likely_tts_boundary(text: &str, idx: usize, ch: char) -> bool {
         }
     }
     true
+}
+
+fn model_label_from_value(value: &serde_json::Value) -> Option<String> {
+    if let Some(model) = value.get("model") {
+        return model_label_from_value(model);
+    }
+    let provider = value.get("provider").and_then(|value| value.as_str());
+    let id = value
+        .get("id")
+        .or_else(|| value.get("modelId"))
+        .or_else(|| value.get("model_id"))
+        .and_then(|value| value.as_str());
+    match (provider, id) {
+        (Some(provider), Some(id)) if !provider.is_empty() => Some(format!("{provider}/{id}")),
+        (_, Some(id)) => Some(id.to_string()),
+        _ => value.as_str().map(ToString::to_string),
+    }
+}
+
+fn model_labels_from_available_models(value: &serde_json::Value) -> Vec<String> {
+    value
+        .get("models")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(model_label_from_value)
+        .collect()
 }
 
 fn normalize_tts_text(text: &str) -> Option<String> {
@@ -979,6 +1030,21 @@ async fn handle_runtime_frame(
             Frame::Tts(TtsFrame::Error { message }) => {
                 send_error(ws, "tts_error", &message).await?;
             }
+            Frame::Metrics(metrics) if metrics.event == "pi_model_changed" => {
+                if let Some(model) = model_label_from_value(&metrics.data) {
+                    send_event(ws, &ServerEvent::ModelChanged { model }).await?;
+                }
+            }
+            Frame::Metrics(metrics) if metrics.event == "pi_available_models" => {
+                send_event(
+                    ws,
+                    &ServerEvent::ModelsAvailable {
+                        models: model_labels_from_available_models(&metrics.data),
+                        current: None,
+                    },
+                )
+                .await?;
+            }
             Frame::Audio(AudioFrame::OutputPcm { bytes, .. }) => {
                 trace.event(
                     EVENT_FRONTEND_AUDIO_PLAY_SCHEDULED,
@@ -1271,10 +1337,12 @@ where
 mod tests {
     use std::fs;
 
+    use serde_json::json;
     use tempfile::tempdir;
 
     use super::{
-        normalize_tts_text, resolve_voice_reference, AssistantTextAccumulator, SentenceBuffer,
+        model_label_from_value, model_labels_from_available_models, normalize_tts_text,
+        resolve_voice_reference, AssistantTextAccumulator, SentenceBuffer,
     };
 
     #[test]
@@ -1305,6 +1373,28 @@ mod tests {
             Some(" Stay sharp out there.".to_string())
         );
         assert_eq!(assistant.push(" Stay sharp out there."), None);
+    }
+
+    #[test]
+    fn model_label_helpers_format_pi_model_responses() {
+        let data = json!({
+            "models": [
+                { "provider": "anthropic", "id": "claude-sonnet-4" },
+                { "provider": "LM-Studio", "id": "gemma-4-26b-a4b-it" }
+            ]
+        });
+        assert_eq!(
+            model_labels_from_available_models(&data),
+            vec![
+                "anthropic/claude-sonnet-4".to_string(),
+                "LM-Studio/gemma-4-26b-a4b-it".to_string(),
+            ]
+        );
+        assert_eq!(
+            model_label_from_value(&json!({ "provider": "openai", "modelId": "gpt-4o" }))
+                .as_deref(),
+            Some("openai/gpt-4o")
+        );
     }
 
     #[test]

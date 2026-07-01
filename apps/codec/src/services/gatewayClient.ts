@@ -24,6 +24,7 @@ export class RustVoiceGatewayClient extends VoiceGatewayClient {
       workspaceOverride: import.meta.env.VITE_FOXLINE_GATEWAY_WORKSPACE || '',
       loadout: import.meta.env.VITE_FOXLINE_GATEWAY_LOADOUT || 'default',
       persona: import.meta.env.VITE_FOXLINE_GATEWAY_PERSONA || agent,
+      model: import.meta.env.VITE_FOXLINE_GATEWAY_MODEL || '',
       characters: codecCharacters,
       agentWorkspaceIds,
       debugTraces: false,
