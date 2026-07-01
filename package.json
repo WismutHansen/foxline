@@ -3,11 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "protocol:generate": "cd packages/protocol && bun run generate",
+    "protocol:typecheck": "cd packages/protocol && bun run typecheck"
   },
   "dependencies": {
     "react": "latest",

@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[ts(export)]
 pub enum ClientControl {
     Hello {
         client: String,
@@ -27,7 +29,8 @@ pub enum ClientControl {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, TS)]
+#[ts(export)]
 pub struct FrontendCapabilities {
     pub protocol_version: u32,
     pub audio: Option<AudioCapabilities>,
@@ -35,15 +38,17 @@ pub struct FrontendCapabilities {
     pub avatar_actions: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub struct AudioCapabilities {
     pub input_pcm: bool,
     pub output_pcm: bool,
     pub sample_rates_hz: Vec<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[ts(export)]
 pub enum ServerEvent {
     Hello {
         protocol_version: u32,
