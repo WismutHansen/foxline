@@ -53,3 +53,19 @@ _Avoid_: Default Pi extension, frontend plugin
 **Brain**:
 The Pi RPC agent process that owns agent reasoning, tool use, skills, extensions, prompt behavior, and model-provider access for an agent session.
 _Avoid_: LLM server, assistant logic
+
+**Protocol**:
+The authoritative frame schema for the Voice Gateway WebSocket: control messages, server events, capability negotiation, audio frame format, and session lifecycle. Defined once in Rust (`crates/protocol`) as the source of truth, consumed natively by Rust frontends and codegenerated to TypeScript for TS frontends. Frontends and the gateway never hand-mirror the Protocol independently.
+_Avoid_: API, wire format, message types
+
+**Client Core**:
+The per-platform module that connects a Frontend Skin to a Voice Gateway: WebSocket lifecycle and reconnect, microphone capture, PCM playback scheduling, capability negotiation, and Persona/Agent session state. A Client Core is platform-bound (TypeScript/AudioContext for web and Tauri; Rust for a future GPUI frontend) and shares the Protocol across that language seam, not its implementation body. There is one Client Core per runtime platform, not one shared across languages.
+_Avoid_: client library, SDK (say Client Core), frontend logic
+
+**Frontend Skin**:
+The presentation and shell of a voice frontend: visuals, interaction model, and OS integration. Codec is a fullscreen/second-screen role-play skin (web today, Tauri later); KITT is an unobtrusive overlay assistant skin (Siri-shaped, cross-platform, Tauri). A Frontend Skin imports a Client Core and owns only presentation and shell concerns; it must not contain gateway protocol or audio-pipeline logic.
+_Avoid_: app, UI, frontend (say Frontend Skin when distinguishing presentation from the Client Core)
+
+**Shell**:
+The OS-integration layer of a Frontend Skin: window policy (fullscreen vs always-on overlay), global shortcuts, tray, and any platform audio or accessibility hooks. Both Codec and KITT are Tauri apps; their Shell configuration differs (overlay/tray for KITT, fullscreen window for Codec). Shell concerns reach the Client Core only through the Client Core's own interface and never cross into the Protocol layer.
+_Avoid_: native layer, platform code (say Shell)

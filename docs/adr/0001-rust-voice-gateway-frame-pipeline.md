@@ -1,6 +1,6 @@
 ---
 status: accepted
-superseded: 0004 (oracle consequences)
+superseded: 0004 (oracle consequences), 0005 (monorepo and frontend framing)
 ---
 
 # Rust Voice Gateway with frame-based streaming pipeline
