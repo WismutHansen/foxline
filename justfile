@@ -20,6 +20,8 @@ demo-tmux:
 demo-rust:
     scripts/foxline-rust
 
+rust-demo: demo-rust
+
 foxline *args:
     scripts/foxline {{args}}
 
