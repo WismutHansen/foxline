@@ -2,4 +2,4 @@
 import type { FrontendCapabilities } from "./FrontendCapabilities";
 import type { JsonValue } from "./serde_json/JsonValue";
 
-export type ClientControl = { "type": "hello", client: string, capabilities: FrontendCapabilities, debug_traces: boolean | null, } | { "type": "start_session", agent: string, workspace: string, loadout: string | null, persona: string | null, } | { "type": "end_session" } | { "type": "vad_hint", speaking: boolean, confidence: number | null, } | { "type": "interrupt" } | { "type": "frontend_tool_result", call_id: string, result: JsonValue, };
+export type ClientControl = { "type": "hello", client: string, capabilities: FrontendCapabilities, debug_traces: boolean | null, } | { "type": "start_session", agent: string, workspace: string, loadout: string | null, persona: string | null, } | { "type": "end_session" } | { "type": "vad_hint", speaking: boolean, confidence: number | null, } | { "type": "text_utterance", text: string, } | { "type": "interrupt" } | { "type": "frontend_tool_result", call_id: string, result: JsonValue, };

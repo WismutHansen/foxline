@@ -394,8 +394,12 @@ export class VoiceGatewayClient {
     ws?.close();
   }
 
-  sendUtterance(_text: string) {
-    return false;
+  sendUtterance(text: string) {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    this.sendControl({ type: 'text_utterance', text: trimmed });
+    return true;
   }
 
   sendAudioPcm16(pcm: ArrayBuffer) {

@@ -315,6 +315,40 @@ async fn handle_connection(
                         )
                         .await?;
                     }
+                    ClientControl::TextUtterance { text } => {
+                        if !session_started {
+                            send_error(
+                                &mut ws,
+                                "session_required",
+                                "start_session before text_utterance",
+                            )
+                            .await?;
+                            continue;
+                        }
+                        let text = text.trim().to_string();
+                        if text.is_empty() {
+                            send_error(&mut ws, "empty_text_utterance", "text_utterance text is empty").await?;
+                            continue;
+                        }
+                        let frame = FrameEnvelope::new(
+                            session_id.clone(),
+                            Frame::Stt(SttFrame::Final {
+                                text: text.clone(),
+                                confidence: Some(1.0),
+                            }),
+                        );
+                        handle_runtime_frame(
+                            &mut ws,
+                            &mut pipeline,
+                            &trace,
+                            &avatar_router,
+                            &mut live,
+                            brain.as_ref(),
+                            &mut tts,
+                            frame,
+                        )
+                        .await?;
+                    }
                     ClientControl::Interrupt => {
                         trace.event(EVENT_BARGE_IN_RECEIVED, json!({}))?;
                         let frame = FrameEnvelope::new(

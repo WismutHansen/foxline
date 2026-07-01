@@ -22,6 +22,9 @@ pub enum ClientControl {
         speaking: bool,
         confidence: Option<f32>,
     },
+    TextUtterance {
+        text: String,
+    },
     Interrupt,
     FrontendToolResult {
         call_id: String,
