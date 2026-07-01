@@ -476,18 +476,23 @@ impl RpcFrameMapper {
                         }
                         _ => {}
                     }
-                    if let Some(content) = assistant.content {
-                        let content = self.sanitize_full_content(&content);
-                        let delta = cumulative_suffix_delta(&self.assistant_content, &content);
-                        if !delta.is_empty() {
-                            frames.push(FrameEnvelope::new(
-                                session_id.clone(),
-                                Frame::Brain(BrainFrame::TextDelta {
-                                    text: delta.to_string(),
-                                }),
-                            ));
+                    // Pi separates thinking and text into distinct content blocks. Reconcile
+                    // cumulative content only for text events, so a thinking_end block's full
+                    // reasoning text is never emitted as visible assistant text.
+                    if assistant.event_type.as_str().starts_with("text") {
+                        if let Some(content) = assistant.content {
+                            let content = self.sanitize_full_content(&content);
+                            let delta = cumulative_suffix_delta(&self.assistant_content, &content);
+                            if !delta.is_empty() {
+                                frames.push(FrameEnvelope::new(
+                                    session_id.clone(),
+                                    Frame::Brain(BrainFrame::TextDelta {
+                                        text: delta.to_string(),
+                                    }),
+                                ));
+                            }
+                            self.assistant_content = content;
                         }
-                        self.assistant_content = content;
                     }
                 }
             }
@@ -614,36 +619,11 @@ fn strip_angle_tags(text: &str) -> String {
 }
 
 fn sanitize_assistant_text(text: &str) -> String {
-    let without_tags = text
-        .replace("</thinking>", " ")
+    text.replace("</thinking>", " ")
         .replace("<thinking>", " ")
         .replace("</think>", " ")
         .replace("<think>", " ")
-        .replace("[Codec Frequency", " ");
-    strip_leaked_reasoning_prose(&without_tags).to_string()
-}
-
-fn strip_leaked_reasoning_prose(text: &str) -> &str {
-    let trimmed = text.trim_start();
-    let looks_like_reasoning = [
-        "The user ",
-        "The user is ",
-        "User just ",
-        "I should ",
-        "I need to ",
-        "I'll ",
-        "Actually, ",
-    ]
-    .iter()
-    .any(|prefix| trimmed.starts_with(prefix));
-    if !looks_like_reasoning {
-        return text;
-    }
-    trimmed
-        .rsplit_once("\n\n")
-        .map(|(_, visible)| visible.trim())
-        .filter(|visible| !visible.is_empty())
-        .unwrap_or(text)
+        .replace("[Codec Frequency", " ")
 }
 
 fn strip_leading_reasoning_marker(text: &str) -> &str {
@@ -787,7 +767,7 @@ mod tests {
     };
 
     use super::{
-        rpc_line_to_frames, sanitize_assistant_text, BrainIdentity, PiLaunch, RpcFrameMapper,
+        rpc_line_to_frames, BrainIdentity, PiLaunch, RpcFrameMapper,
         VOICE_SESSION_APPEND_SYSTEM_PROMPT,
     };
 
@@ -1001,22 +981,61 @@ mod tests {
     }
 
     #[test]
-    fn qwen_session_thinking_part_strips_to_visible_text_part() {
-        let thinking_part = r#"The user is repeatedly asking "Colonel, can you hear me?". I have been responding "Loud and clear, Snake..." each time. The user is testing the system's ability to recognize when they are stuck in a loop or perhaps just checking if I am still responsive. I will confirm I am listening but perhaps prompt them differently or simply acknowledge without repeating the exact same phrase if I have said it multiple times in a row, but given the instruction to stay in character and be concise, I should just confirm the connection is stable. The user might be frustrated or checking for latency. I will keep it brief and authoritative.
+    fn thinking_block_content_never_leaks_as_visible_text() {
+        // Captured from a real Pi RPC stream (zgx/qwen3.6-35b). Pi separates the
+        // reasoning into thinking_* deltas and the answer into text_* deltas, and the
+        // thinking_end block carries the full reasoning text in its `content` field.
+        let session_id = SessionId::new();
+        let mut mapper = RpcFrameMapper::default();
 
-Actually, looking at the history, I have replied almost identically to every iteration of this specific question in this session. The user is clearly testing the connection or the system's response. I will maintain the persona but perhaps vary the wording slightly to show active listening rather than a canned response, or just stick to the established pattern as it's working. The instructions say "stay in character", "concise", "default to 1-2 sentences".
+        // A reasoning chunk arrives on the thinking channel.
+        let _ = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"The user is reaching out to me. I should stay in character."}}"#,
+            )
+            .unwrap();
 
-I'll stick to the established pattern as it's a "codec" call and repeating confirmation is normal protocol in radio comms, but I'll try to keep it very tight.
+        // The visible answer arrives on the text channel.
+        let answer = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Loud and clear, Snake. What do you have for me?"}}"#,
+            )
+            .unwrap();
 
-Loud and clear, Snake. The channel is open and stable. What's your report?
-"#;
-        let visible_text_part =
-            "Loud and clear, Snake. The channel is open and stable. What's your report?";
+        // thinking_end carries the full reasoning text in `content`.
+        let thinking_end = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","content":"The user is reaching out to me. I should stay in character."}}"#,
+            )
+            .unwrap();
 
-        assert_eq!(sanitize_assistant_text(thinking_part), visible_text_part);
+        // text_end carries the full visible text in `content`.
+        let text_end = mapper
+            .line_to_frames(
+                &session_id,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Loud and clear, Snake. What do you have for me?"}}"#,
+            )
+            .unwrap();
+
+        let visible: Vec<String> = [&answer, &thinking_end, &text_end]
+            .into_iter()
+            .flatten()
+            .filter_map(|frame| match &frame.frame {
+                Frame::Brain(BrainFrame::TextDelta { text }) => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+
+        let leaked = visible
+            .iter()
+            .any(|text| text.contains("The user") || text.contains("stay in character"));
+        assert!(!leaked, "reasoning leaked into visible text: {visible:?}");
         assert_eq!(
-            sanitize_assistant_text(visible_text_part),
-            visible_text_part
+            visible.concat(),
+            "Loud and clear, Snake. What do you have for me?"
         );
     }
 
