@@ -63,8 +63,12 @@ The per-platform module that connects a Frontend Skin to a Voice Gateway: WebSoc
 _Avoid_: client library, SDK (say Client Core), frontend logic
 
 **Frontend Skin**:
-The presentation and shell of a voice frontend: visuals, interaction model, and OS integration. Codec is a fullscreen/second-screen role-play skin (web today, Tauri later); KITT is an unobtrusive overlay assistant skin (Siri-shaped, cross-platform, Tauri). A Frontend Skin imports a Client Core and owns only presentation and shell concerns; it must not contain gateway protocol or audio-pipeline logic.
+The presentation and shell of a voice frontend: visuals, interaction model, and OS integration. Codec is a fullscreen/second-screen role-play skin (web today, Tauri later); Overlayz is an unobtrusive overlay assistant skin (Siri-shaped, cross-platform, Tauri). A Frontend Skin imports a Client Core and owns only presentation and shell concerns; it must not contain gateway protocol or audio-pipeline logic. Adding a new Frontend Skin means adding a new `apps/` member that imports `@foxline/voice-client`; there is no runtime skin-loading framework.
 _Avoid_: app, UI, frontend (say Frontend Skin when distinguishing presentation from the Client Core)
+
+**Visual Theme**:
+A swappable presentation identity inside a Frontend Skin, paired with a Persona: the visuals, animation, and interaction styling the skin renders for the active Persona. LED and Orb are Visual Themes inside Overlayz; KITT survives as a Visual Theme plus a Persona, not as an app name. Two Visual Themes today justify the theme seam as a real in-app extension point. A Visual Theme renders the active Persona; it does not own it.
+_Avoid_: skin (say Visual Theme for the in-skin presentation unit; Frontend Skin for the app)
 
 **Shell**:
 The OS-integration layer of a Frontend Skin: window policy (fullscreen vs always-on overlay), global shortcuts, tray, and any platform audio or accessibility hooks. Both Codec and KITT are Tauri apps; their Shell configuration differs (overlay/tray for KITT, fullscreen window for Codec). Shell concerns reach the Client Core only through the Client Core's own interface and never cross into the Protocol layer.
