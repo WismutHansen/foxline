@@ -476,10 +476,12 @@ impl RpcFrameMapper {
                         }
                         _ => {}
                     }
-                    // Pi separates thinking and text into distinct content blocks. Reconcile
-                    // cumulative content only for text events, so a thinking_end block's full
-                    // reasoning text is never emitted as visible assistant text.
-                    if assistant.event_type.as_str().starts_with("text") {
+                    // Pi separates thinking and text into distinct content blocks, and the
+                    // terminal text_end block carries the full visible content. Reconcile
+                    // cumulative content only on streaming text_delta events, so neither a
+                    // thinking_end block's reasoning nor a text_end block's full replay is
+                    // emitted as a visible delta (which would duplicate the streamed answer).
+                    if assistant.event_type.as_str() == "text_delta" {
                         if let Some(content) = assistant.content {
                             let content = self.sanitize_full_content(&content);
                             let delta = cumulative_suffix_delta(&self.assistant_content, &content);
@@ -1036,6 +1038,59 @@ mod tests {
         assert_eq!(
             visible.concat(),
             "Loud and clear, Snake. What do you have for me?"
+        );
+    }
+
+    #[test]
+    fn text_end_full_content_does_not_duplicate_streamed_answer() {
+        // Captured shape from ZGX/Step providers: the answer streams in as small
+        // text_delta chunks (delta only), then text_end arrives carrying the FULL
+        // visible content. The mapper must not re-emit that full content as a second
+        // delta, which would duplicate the assistant's answer for both display and TTS.
+        let session_id = SessionId::new();
+        let mut mapper = RpcFrameMapper::default();
+
+        let answer = "Loud and clear, Snake. What do you have for me?";
+        for delta in [
+            "\n\n",
+            "L",
+            "oud",
+            " and",
+            " clear",
+            ",",
+            " Snake.",
+            " What do you have for me?",
+        ] {
+            let _ = mapper
+                .line_to_frames(
+                    &session_id,
+                    &format!(
+                        r#"{{"type":"message_update","assistantMessageEvent":{{"type":"text_delta","delta":{}}}}}"#,
+                        serde_json::Value::String(delta.to_string())
+                    ),
+                )
+                .unwrap();
+        }
+        let text_end = mapper
+            .line_to_frames(
+                &session_id,
+                &format!(
+                    r#"{{"type":"message_update","assistantMessageEvent":{{"type":"text_end","content":{}}}}}"#,
+                    serde_json::Value::String(format!("\n\n{answer}"))
+                ),
+            )
+            .unwrap();
+
+        let visible: Vec<String> = text_end
+            .iter()
+            .filter_map(|frame| match &frame.frame {
+                Frame::Brain(BrainFrame::TextDelta { text }) => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            visible.is_empty(),
+            "text_end re-emitted streamed answer as a duplicate delta: {visible:?}"
         );
     }
 
