@@ -796,6 +796,70 @@ mod tests {
 
     use std::path::PathBuf;
 
+    /// Replays a captured real Pi RPC stream (one JSON line per stdout line) through a
+    /// single stateful mapper, exactly as the gateway reader loop does, and returns the
+    /// concatenated visible assistant text.
+    fn replay_visible_text(capture: &str) -> String {
+        let session_id = SessionId::new();
+        let mut mapper = RpcFrameMapper::default();
+        let mut visible = String::new();
+        for line in capture.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            for frame in mapper.line_to_frames(&session_id, line).unwrap() {
+                if let Frame::Brain(BrainFrame::TextDelta { text }) = frame.frame {
+                    visible.push_str(&text);
+                }
+            }
+        }
+        visible
+    }
+
+    #[test]
+    fn replays_real_pi_rpc_streams_without_leaks_or_duplication() {
+        // Fixtures captured from live Pi RPC sessions against the campbell voice agent.
+        // Each pair is (captured stream, Pi's authoritative full visible text).
+        // Gemma/LM-Studio streams text only; Qwen/ZGX and Step/HP-Z8 stream a reasoning
+        // block then the answer.
+        let fixtures: &[(&str, &str)] = &[
+            (
+                include_str!("../assets/fixtures/rpc-streams/gemma-lm-studio.jsonl"),
+                "I hear you, Snake. What's your status?",
+            ),
+            (
+                include_str!("../assets/fixtures/rpc-streams/qwen-zgx.jsonl"),
+                "Loud and clear, Snake. What do you have for me?",
+            ),
+            (
+                include_str!("../assets/fixtures/rpc-streams/step-hp-z8.jsonl"),
+                "Loud and clear, Snake. Go ahead.",
+            ),
+        ];
+
+        for (capture, expected) in fixtures {
+            let visible = replay_visible_text(capture);
+
+            // No reasoning trace may leak into the visible stream.
+            let leaked = visible.contains("The user")
+                || visible.contains("I should")
+                || visible.contains("stay in character")
+                || visible.contains("thinking");
+            assert!(!leaked, "reasoning leaked into visible text: {visible:?}");
+
+            // The answer must not be duplicated (text_end replay guard).
+            let occurrences = visible.matches(expected).count();
+            assert_eq!(
+                occurrences, 1,
+                "expected the answer once, found {occurrences} in: {visible:?}"
+            );
+
+            // The trimmed visible text must equal Pi's authoritative answer exactly.
+            assert_eq!(visible.trim(), *expected, "visible text mismatch");
+        }
+    }
+
     #[test]
     fn pi_launch_includes_rpc_mode_identity_config_tools_and_extensions() {
         let dir = tempdir().unwrap();
