@@ -363,8 +363,11 @@ pub fn qwen_worker_trace_event(frame: &FrameEnvelope) -> Option<(&'static str, s
 
 pub fn ensure_supported_tts_backend(name: &str) -> Result<()> {
     match name {
-        "qwen3-worker" => Ok(()),
-        "rust-mlx" | "rust-candle" | "cpp-ggml" | "elevenlabs" | "openai" => {
+        // qwen3-worker: python MLX worker (services/qwen3_tts_worker.py).
+        // rust-mlx: native spqx worker (pibot-tts-worker), byte-identical
+        // binary protocol; see ws.rs build_tts_adapter for launch resolution.
+        "qwen3-worker" | "rust-mlx" => Ok(()),
+        "rust-candle" | "cpp-ggml" | "elevenlabs" | "openai" => {
             bail!("TTS backend {name} is reserved but not implemented yet")
         }
         other => bail!("unsupported TTS backend {other}"),

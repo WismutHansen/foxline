@@ -1092,28 +1092,68 @@ fn build_tts_adapter(
     persona: &str,
     workspace: &std::path::Path,
 ) -> Result<Box<dyn TtsAdapter>> {
-    crate::tts::ensure_supported_tts_backend(name)?;
+    // FOXLINE_TTS_BACKEND overrides the loadout's adapter name so a backend
+    // can be A/B'd without editing loadouts.
+    let backend = env::var("FOXLINE_TTS_BACKEND").unwrap_or_else(|_| name.to_string());
+    crate::tts::ensure_supported_tts_backend(&backend)?;
     let repo = repo_root();
-    let worker = env::var("CODEC_TTS_WORKER_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| repo.join("services/qwen3_tts_worker.py"));
     let reference = resolve_voice_reference(persona, workspace, &repo)?;
     let sample_rate = env::var("CODEC_TTS_WORKER_SAMPLE_RATE")
         .ok()
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(24_000);
-    let mut args = vec![
-        "run".to_string(),
-        "--no-project".to_string(),
-        "--with".to_string(),
-        "speech-to-speech==0.2.9".to_string(),
-        "python".to_string(),
-        worker.display().to_string(),
-        "--serve".to_string(),
-        "--model-name".to_string(),
-        env::var("CODEC_TTS_MODEL")
-            .or_else(|_| env::var("QWEN3_TTS_MODEL"))
-            .unwrap_or_else(|_| "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit".to_string()),
+    let model = env::var("CODEC_TTS_MODEL")
+        .or_else(|_| env::var("QWEN3_TTS_MODEL"))
+        .unwrap_or_else(|_| "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-6bit".to_string());
+
+    // Both workers speak the same binary frame protocol and (deliberately)
+    // the same CLI; only the launch command and model reference differ.
+    let (command, mut args) = match backend.as_str() {
+        "rust-mlx" => {
+            let binary = resolve_rust_tts_worker(&repo)?;
+            // The native worker loads from a local directory, not an HF id.
+            let model_path = env::var("FOXLINE_TTS_MODEL_PATH")
+                .map(PathBuf::from)
+                .ok()
+                .or_else(|| hf_snapshot_path(&model))
+                .with_context(|| {
+                    format!(
+                        "rust-mlx TTS backend needs a local model directory: set \
+                         FOXLINE_TTS_MODEL_PATH or download {model} into the \
+                         Hugging Face cache first"
+                    )
+                })?;
+            (
+                binary.display().to_string(),
+                vec![
+                    "--serve".to_string(),
+                    "--model-path".to_string(),
+                    model_path.display().to_string(),
+                ],
+            )
+        }
+        _ => {
+            let worker = env::var("CODEC_TTS_WORKER_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| repo.join("services/qwen3_tts_worker.py"));
+            (
+                env::var("CODEC_TTS_WORKER_COMMAND").unwrap_or_else(|_| "uv".to_string()),
+                vec![
+                    "run".to_string(),
+                    "--no-project".to_string(),
+                    "--with".to_string(),
+                    "speech-to-speech==0.2.9".to_string(),
+                    "python".to_string(),
+                    worker.display().to_string(),
+                    "--serve".to_string(),
+                    "--model-name".to_string(),
+                    model,
+                ],
+            )
+        }
+    };
+
+    args.extend([
         "--ref-audio".to_string(),
         reference.wav.display().to_string(),
         "--ref-text-file".to_string(),
@@ -1123,23 +1163,75 @@ fn build_tts_adapter(
         "--output-sample-rate".to_string(),
         sample_rate.to_string(),
         "--temperature".to_string(),
-        env::var("QWEN3_TTS_TEMPERATURE").unwrap_or_else(|_| "0.7".to_string()),
+        env::var("QWEN3_TTS_TEMPERATURE").unwrap_or_else(|_| "0.9".to_string()),
         "--top-k".to_string(),
-        env::var("QWEN3_TTS_TOP_K").unwrap_or_else(|_| "30".to_string()),
+        env::var("QWEN3_TTS_TOP_K").unwrap_or_else(|_| "50".to_string()),
         "--blocksize".to_string(),
         env::var("CODEC_TTS_WORKER_BLOCKSIZE").unwrap_or_else(|_| "2048".to_string()),
-    ];
+    ]);
     if let Ok(seed) = env::var("QWEN3_TTS_SEED") {
         args.push("--seed".to_string());
         args.push(seed);
     }
-    let mut config = QwenWorkerConfig::new(
-        env::var("CODEC_TTS_WORKER_COMMAND").unwrap_or_else(|_| "uv".to_string()),
-        args,
-        repo,
-    );
+    let mut config = QwenWorkerConfig::new(command, args, repo);
     config.output_sample_rate_hz = sample_rate;
     Ok(Box::new(QwenWorkerTtsAdapter::new(config)))
+}
+
+/// Locate the native spqx TTS worker: explicit env, then the sibling spqx
+/// checkout's release build, then PATH.
+fn resolve_rust_tts_worker(repo: &Path) -> Result<PathBuf> {
+    if let Ok(path) = env::var("FOXLINE_TTS_RUST_WORKER") {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            return Ok(path);
+        }
+        anyhow::bail!(
+            "FOXLINE_TTS_RUST_WORKER points at {}, which does not exist",
+            path.display()
+        );
+    }
+    if let Some(parent) = repo.parent() {
+        let sibling = parent.join("spqx/target/release/pibot-tts-worker");
+        if sibling.exists() {
+            return Ok(sibling);
+        }
+    }
+    if let Ok(output) = std::process::Command::new("which")
+        .arg("pibot-tts-worker")
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Ok(PathBuf::from(path));
+            }
+        }
+    }
+    anyhow::bail!(
+        "rust-mlx TTS backend selected but no worker binary found: set \
+         FOXLINE_TTS_RUST_WORKER, build ../spqx (cargo build --release \
+         --no-default-features --features mlx --bin pibot-tts-worker), or put \
+         pibot-tts-worker on PATH"
+    )
+}
+
+/// Resolve a Hugging Face model id to its local cache snapshot directory.
+fn hf_snapshot_path(model_id: &str) -> Option<PathBuf> {
+    let home = env::var("HOME").ok()?;
+    let cache = env::var("HF_HOME")
+        .map(|hf| PathBuf::from(hf).join("hub"))
+        .unwrap_or_else(|_| PathBuf::from(&home).join(".cache/huggingface/hub"));
+    let repo_dir = cache.join(format!("models--{}", model_id.replace('/', "--")));
+    let snapshots = repo_dir.join("snapshots");
+    let mut entries: Vec<_> = std::fs::read_dir(&snapshots)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    entries.sort();
+    entries.pop()
 }
 
 struct VoiceReference {

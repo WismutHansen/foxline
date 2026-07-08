@@ -48,7 +48,9 @@ keep_warm_ms = 600000
 
 [adapters]
 stt = "parakeet-silero"
-tts = "qwen3-worker"
+# tts backends: "rust-mlx" (native spqx worker; fastest, 0.3s model load) or
+# "qwen3-worker" (python MLX worker). Same binary protocol and voice quality.
+tts = "rust-mlx"
 
 [tools]
 required_frontend = ["codec.display"]
