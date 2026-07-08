@@ -58,7 +58,9 @@ impl Default for AdapterLoadout {
     fn default() -> Self {
         Self {
             stt: "parakeet-silero".to_string(),
-            tts: "qwen3-worker".to_string(),
+            // Native spqx worker: same protocol and voice quality as
+            // qwen3-worker, 0.3s model load vs 2.3s, faster first audio.
+            tts: "rust-mlx".to_string(),
         }
     }
 }
@@ -223,7 +225,7 @@ allowed_pi = ["read", "write"]
 
 [adapters]
 stt = "parakeet-silero"
-tts = "qwen3-worker"
+tts = "rust-mlx"
 
 [lifecycle]
 prewarm = true

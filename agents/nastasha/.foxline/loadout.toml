@@ -5,7 +5,7 @@ append_system_prompt_file = "SYSTEM.md"
 
 [adapters]
 stt = "parakeet-silero"
-tts = "qwen3-worker"
+tts = "rust-mlx"
 
 [lifecycle]
 prewarm = true
