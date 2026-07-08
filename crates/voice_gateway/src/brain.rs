@@ -153,6 +153,69 @@ impl PiLaunch {
             cwd: loadout.workspace.clone(),
         }
     }
+
+    /// Ephemeral warmup variant of this launch: identical model and
+    /// system-prompt chain, but `--print --no-session` with a trivial prompt.
+    /// The provider loads the model and prefills the exact prompt prefix the
+    /// real session will send, while no session file is written and the real
+    /// named session's history gains nothing.
+    pub fn warmup_launch(&self) -> PiLaunch {
+        let mut args = Vec::with_capacity(self.args.len() + 3);
+        let mut skip_value = false;
+        for arg in &self.args {
+            if skip_value {
+                skip_value = false;
+                continue;
+            }
+            match arg.as_str() {
+                "--mode" | "--session-dir" => skip_value = true,
+                "--continue" => {}
+                _ => args.push(arg.clone()),
+            }
+        }
+        args.push("--print".to_string());
+        args.push("--no-session".to_string());
+        args.push("Radio check. Reply with one word.".to_string());
+        PiLaunch {
+            command: self.command.clone(),
+            args,
+            cwd: self.cwd.clone(),
+        }
+    }
+}
+
+/// Fire-and-forget model warmup (fxl-rw9m.6): runs the ephemeral `--print
+/// --no-session` launch so the provider loads the model before the first real
+/// turn. Never blocks session startup; killed if it exceeds its window.
+fn spawn_model_warmup(launch: PiLaunch) {
+    tokio::spawn(async move {
+        let child = Command::new(&launch.command)
+            .args(&launch.args)
+            .current_dir(&launch.cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        let mut child = match child {
+            Ok(child) => child,
+            Err(error) => {
+                tracing::debug!(%error, "brain warmup spawn failed");
+                return;
+            }
+        };
+        match tokio::time::timeout(Duration::from_secs(180), child.wait()).await {
+            Ok(Ok(status)) => {
+                tracing::debug!(?status, "brain warmup finished");
+            }
+            Ok(Err(error)) => {
+                tracing::debug!(%error, "brain warmup wait failed");
+            }
+            Err(_) => {
+                tracing::debug!("brain warmup timed out; killing");
+                let _ = child.kill().await;
+            }
+        }
+    });
 }
 
 pub struct BrainPool {
@@ -179,9 +242,21 @@ impl BrainPool {
         }
 
         let launch = PiLaunch::build(&self.config, &identity, loadout);
+        // Prewarm only spawns the Pi process; the provider still loads the
+        // model lazily on the first prompt (measured: 10s first-turn on a
+        // cold LM Studio 26B). The ephemeral warmup fixes that without
+        // touching session history.
+        let warmup = loadout
+            .loadout
+            .lifecycle
+            .warmup_prompt
+            .then(|| launch.warmup_launch());
         let mut brain = PiRpcBrain::new(identity.clone(), launch, self.config.idle_timeout_ms);
         if self.config.prewarm || loadout.loadout.lifecycle.prewarm {
             brain.start().await?;
+            if let Some(warmup) = warmup {
+                spawn_model_warmup(warmup);
+            }
         }
         let brain = Arc::new(Mutex::new(brain));
         brains.insert(identity, Arc::clone(&brain));

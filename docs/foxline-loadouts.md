@@ -45,6 +45,11 @@ thinking = "minimal"
 [lifecycle]
 prewarm = true
 keep_warm_ms = 600000
+# On prewarm, also run an ephemeral `pi --print --no-session` with the same
+# launch args so the provider loads the model and prefills the prompt prefix
+# before the first real turn (measured: 10.2s -> 0.8s first audio). Writes no
+# session history.
+warmup_prompt = true
 
 [adapters]
 stt = "parakeet-silero"

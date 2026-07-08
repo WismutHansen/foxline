@@ -36,6 +36,11 @@ pub struct PiLoadout {
 pub struct LifecycleLoadout {
     pub prewarm: bool,
     pub keep_warm_ms: u64,
+    /// On prewarm, additionally run an ephemeral `pi --print --no-session`
+    /// with the same launch args so the model provider loads the model and
+    /// prefills the prompt prefix before the first real turn. Writes no
+    /// session history.
+    pub warmup_prompt: bool,
 }
 
 impl Default for LifecycleLoadout {
@@ -43,6 +48,7 @@ impl Default for LifecycleLoadout {
         Self {
             prewarm: false,
             keep_warm_ms: 300_000,
+            warmup_prompt: true,
         }
     }
 }
