@@ -1191,28 +1191,28 @@ fn resolve_rust_tts_worker(repo: &Path) -> Result<PathBuf> {
             path.display()
         );
     }
-    if let Some(parent) = repo.parent() {
-        let sibling = parent.join("spqx/target/release/pibot-tts-worker");
-        if sibling.exists() {
-            return Ok(sibling);
+    // "pibot-tts-worker" is the upstream name kept as a compat alias.
+    for name in ["spqx-tts-worker", "pibot-tts-worker"] {
+        if let Some(parent) = repo.parent() {
+            let sibling = parent.join("spqx/target/release").join(name);
+            if sibling.exists() {
+                return Ok(sibling);
+            }
         }
-    }
-    if let Ok(output) = std::process::Command::new("which")
-        .arg("pibot-tts-worker")
-        .output()
-    {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Ok(PathBuf::from(path));
+        if let Ok(output) = std::process::Command::new("which").arg(name).output() {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() {
+                    return Ok(PathBuf::from(path));
+                }
             }
         }
     }
     anyhow::bail!(
         "rust-mlx TTS backend selected but no worker binary found: set \
          FOXLINE_TTS_RUST_WORKER, build ../spqx (cargo build --release \
-         --no-default-features --features mlx --bin pibot-tts-worker), or put \
-         pibot-tts-worker on PATH"
+         --no-default-features --features mlx --bin spqx-tts-worker), or put \
+         spqx-tts-worker on PATH"
     )
 }
 

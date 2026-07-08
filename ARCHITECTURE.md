@@ -104,7 +104,7 @@ The Rust gateway exposes TTS through an adapter trait. The first backend is `qwe
 - PCM chunks also emit canonical binary audio frames for frontend transport.
 - request start, first audio, and cancel events use trace names comparable to the legacy bridge.
 
-`rust-mlx` is implemented: it launches the native spqx worker (`pibot-tts-worker`), which speaks the same binary protocol and CLI as the python worker but loads models in ~0.3s and beats it on time-to-first-audio and RTF. The binary is resolved from `FOXLINE_TTS_RUST_WORKER`, then a sibling `../spqx` release build, then `PATH`; the model must be a local directory (`FOXLINE_TTS_MODEL_PATH` or the Hugging Face cache snapshot of the configured model id). `FOXLINE_TTS_BACKEND` overrides the loadout's adapter name for A/B testing.
+`rust-mlx` is implemented: it launches the native spqx worker (`spqx-tts-worker`; `pibot-tts-worker` remains as the upstream-name alias), which speaks the same binary protocol and CLI as the python worker but loads models in ~0.3s and beats it on time-to-first-audio and RTF. The binary is resolved from `FOXLINE_TTS_RUST_WORKER`, then a sibling `../spqx` release build, then `PATH`; the model must be a local directory (`FOXLINE_TTS_MODEL_PATH` or the Hugging Face cache snapshot of the configured model id). `FOXLINE_TTS_BACKEND` overrides the loadout's adapter name for A/B testing.
 
 Reserved backend names are `rust-candle`, `cpp-ggml`, `elevenlabs`, and `openai`; they are explicit future adapter slots, not active Brain paths.
 
