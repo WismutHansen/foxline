@@ -116,25 +116,6 @@ function supportFaceFor(characterId: string, characters: CodecCharacterInfo[]) {
 
 const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-const ASSISTANT_DEDUPE_MIN_CHARS = 12;
-
-function suffixPrefixOverlap(left: string, right: string): number {
-  const max = Math.min(left.length, right.length);
-  for (let length = max; length >= ASSISTANT_DEDUPE_MIN_CHARS; length -= 1) {
-    if (left.endsWith(right.slice(0, length))) return length;
-  }
-  return 0;
-}
-
-function appendAssistantDelta(current: string, delta: string): string {
-  if (!delta) return current;
-  if (!current) return delta;
-  if (current.length >= ASSISTANT_DEDUPE_MIN_CHARS && delta.startsWith(current)) return delta;
-  if (delta.trim().length >= ASSISTANT_DEDUPE_MIN_CHARS && current.endsWith(delta)) return current;
-  const overlap = suffixPrefixOverlap(current, delta);
-  return current + delta.slice(overlap);
-}
-
 function fuzzyScore(option: string, query: string): number {
   const needle = query.trim().toLowerCase();
   const haystack = option.toLowerCase();
@@ -314,9 +295,8 @@ function useCodecDemo() {
         });
       }
       if (event.type === 'assistant_delta') {
-        const nextAssistantText = appendAssistantDelta(assistantText.current, event.delta);
-        if (nextAssistantText === assistantText.current) return;
-        assistantText.current = nextAssistantText;
+        if (!event.delta) return;
+        assistantText.current += event.delta;
         setAssistantResponse(assistantText.current);
         setTranscript((t) => {
           const idx = assistantLineIndex.current;

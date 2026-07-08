@@ -1,5 +1,6 @@
 pub mod avatar;
 pub mod brain;
+pub mod think_block_filter;
 pub mod config;
 pub mod frame;
 pub mod loadout;

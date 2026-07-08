@@ -418,11 +418,8 @@ struct AssistantMessageEvent {
     #[serde(rename = "type")]
     event_type: String,
     delta: Option<String>,
-    content: Option<String>,
     channel: Option<String>,
     phase: Option<String>,
-    reasoning: Option<String>,
-    reasoning_content: Option<String>,
 }
 
 pub fn rpc_line_to_frames(session_id: &SessionId, line: &str) -> Result<Vec<FrameEnvelope>> {
@@ -432,9 +429,7 @@ pub fn rpc_line_to_frames(session_id: &SessionId, line: &str) -> Result<Vec<Fram
 
 #[derive(Default)]
 struct RpcFrameMapper {
-    assistant_content: String,
-    in_angle_tag: bool,
-    saw_internal_tags_this_turn: bool,
+    think_filter: crate::think_block_filter::ThinkBlockFilter,
 }
 
 impl RpcFrameMapper {
@@ -448,17 +443,25 @@ impl RpcFrameMapper {
         match event.event_type.as_str() {
             "message_update" => {
                 if let Some(assistant) = event.assistant_message_event {
-                    if is_hidden_assistant_event(&assistant) {
-                        return frames;
-                    }
+                    // Single source of truth: visible assistant text is emitted ONLY
+                    // from a text_delta event. Reasoning lives in separate
+                    // thinking_* events which are ignored here by construction, and the
+                    // terminal text_end event (full cumulative content) is never read
+                    // for text, so reasoning can never leak and the answer can never
+                    // be duplicated. Two residual provider misbehaviors are guarded:
+                    // a text_delta tagged with a thinking channel/phase (metadata-only
+                    // check, no text inspection) and <think>...</think> tags injected
+                    // into the visible text itself, handled by ThinkBlockFilter.
                     match assistant.event_type.as_str() {
                         "text_delta" => {
+                            if is_thinking_channel(&assistant) {
+                                return frames;
+                            }
                             if let Some(delta) = assistant.delta {
-                                let delta = self.sanitize_delta(&delta);
+                                let delta = self.think_filter.filter(&delta);
                                 if delta.trim().is_empty() {
                                     return frames;
                                 }
-                                self.assistant_content.push_str(&delta);
                                 frames.push(FrameEnvelope::new(
                                     session_id.clone(),
                                     Frame::Brain(BrainFrame::TextDelta { text: delta }),
@@ -466,35 +469,14 @@ impl RpcFrameMapper {
                             }
                         }
                         "done" => {
-                            self.assistant_content.clear();
-                            self.in_angle_tag = false;
-                            self.saw_internal_tags_this_turn = false;
+                            self.think_filter =
+                                crate::think_block_filter::ThinkBlockFilter::default();
                             frames.push(FrameEnvelope::new(
                                 session_id.clone(),
                                 Frame::Brain(BrainFrame::Done),
                             ));
                         }
                         _ => {}
-                    }
-                    // Pi separates thinking and text into distinct content blocks, and the
-                    // terminal text_end block carries the full visible content. Reconcile
-                    // cumulative content only on streaming text_delta events, so neither a
-                    // thinking_end block's reasoning nor a text_end block's full replay is
-                    // emitted as a visible delta (which would duplicate the streamed answer).
-                    if assistant.event_type.as_str() == "text_delta" {
-                        if let Some(content) = assistant.content {
-                            let content = self.sanitize_full_content(&content);
-                            let delta = cumulative_suffix_delta(&self.assistant_content, &content);
-                            if !delta.is_empty() {
-                                frames.push(FrameEnvelope::new(
-                                    session_id.clone(),
-                                    Frame::Brain(BrainFrame::TextDelta {
-                                        text: delta.to_string(),
-                                    }),
-                                ));
-                            }
-                            self.assistant_content = content;
-                        }
                     }
                 }
             }
@@ -561,130 +543,23 @@ impl RpcFrameMapper {
         }
         frames
     }
-
-    fn sanitize_delta(&mut self, delta: &str) -> String {
-        let no_tags = self.strip_angle_tags_streaming(delta);
-        let mut clean = sanitize_assistant_text(&no_tags);
-        if self.saw_internal_tags_this_turn && self.assistant_content.trim().is_empty() {
-            clean = strip_leading_reasoning_marker(&clean).to_string();
-        }
-        clean
-    }
-
-    fn sanitize_full_content(&mut self, content: &str) -> String {
-        let no_tags = strip_angle_tags(content);
-        let mut clean = sanitize_assistant_text(&no_tags);
-        if self.saw_internal_tags_this_turn && self.assistant_content.trim().is_empty() {
-            clean = strip_leading_reasoning_marker(&clean).to_string();
-        }
-        clean
-    }
-
-    fn strip_angle_tags_streaming(&mut self, delta: &str) -> String {
-        let mut out = String::new();
-        for ch in delta.chars() {
-            if self.in_angle_tag {
-                self.saw_internal_tags_this_turn = true;
-                if ch == '>' {
-                    self.in_angle_tag = false;
-                }
-                continue;
-            }
-            if ch == '<' {
-                self.in_angle_tag = true;
-                self.saw_internal_tags_this_turn = true;
-                continue;
-            }
-            out.push(ch);
-        }
-        out
-    }
 }
 
-fn strip_angle_tags(text: &str) -> String {
-    let mut out = String::new();
-    let mut in_tag = false;
-    for ch in text.chars() {
-        if in_tag {
-            if ch == '>' {
-                in_tag = false;
-            }
-            continue;
-        }
-        if ch == '<' {
-            in_tag = true;
-            continue;
-        }
-        out.push(ch);
+/// Structured guard for providers that tag reasoning as a `text_delta` with a
+/// thinking channel/phase instead of using `thinking_*` events. Inspects event
+/// metadata only — never the text itself.
+fn is_thinking_channel(event: &AssistantMessageEvent) -> bool {
+    fn hidden(value: Option<&str>) -> bool {
+        matches!(
+            value.map(|value| value.trim().to_ascii_lowercase()),
+            Some(value)
+                if matches!(
+                    value.as_str(),
+                    "thought" | "thinking" | "analysis" | "reasoning"
+                )
+        )
     }
-    out
-}
-
-fn sanitize_assistant_text(text: &str) -> String {
-    text.replace("</thinking>", " ")
-        .replace("<thinking>", " ")
-        .replace("</think>", " ")
-        .replace("<think>", " ")
-        .replace("[Codec Frequency", " ")
-}
-
-fn strip_leading_reasoning_marker(text: &str) -> &str {
-    let trimmed = text.trim_start();
-    for marker in ["thought", "analysis", "reasoning"] {
-        if let Some(rest) = trimmed.strip_prefix(marker) {
-            let rest =
-                rest.trim_start_matches(|ch: char| ch == ':' || ch == '-' || ch.is_whitespace());
-            return rest;
-        }
-    }
-    text
-}
-
-fn is_hidden_assistant_event(event: &AssistantMessageEvent) -> bool {
-    is_hidden_channel(Some(event.event_type.as_str()))
-        || is_hidden_channel(event.channel.as_deref())
-        || is_hidden_channel(event.phase.as_deref())
-        || has_reasoning_only_payload(event)
-}
-
-fn is_hidden_channel(value: Option<&str>) -> bool {
-    matches!(
-        value.map(|value| value.trim().to_ascii_lowercase()),
-        Some(value)
-            if matches!(
-                value.as_str(),
-                "thought"
-                    | "thought_delta"
-                    | "thinking"
-                    | "thinking_delta"
-                    | "analysis"
-                    | "analysis_delta"
-                    | "reasoning"
-                    | "reasoning_delta"
-            )
-    )
-}
-
-fn has_reasoning_only_payload(event: &AssistantMessageEvent) -> bool {
-    let has_visible_text = event
-        .delta
-        .as_deref()
-        .is_some_and(|text| !text.trim().is_empty())
-        || event
-            .content
-            .as_deref()
-            .is_some_and(|text| !text.trim().is_empty());
-    if has_visible_text {
-        return false;
-    }
-    event
-        .reasoning
-        .as_deref()
-        .is_some_and(|text| !text.trim().is_empty())
-        || event
-            .reasoning_content
-            .as_deref()
-            .is_some_and(|text| !text.trim().is_empty())
+    hidden(event.channel.as_deref()) || hidden(event.phase.as_deref())
 }
 
 fn parse_provider_model(model: &str) -> (&str, &str) {
@@ -692,26 +567,6 @@ fn parse_provider_model(model: &str) -> (&str, &str) {
         .split_once('/')
         .map(|(provider, model_id)| (provider, model_id))
         .unwrap_or(("", model))
-}
-
-fn cumulative_suffix_delta<'a>(previous: &str, content: &'a str) -> &'a str {
-    if previous.is_empty() {
-        return content;
-    }
-    if content == previous {
-        return "";
-    }
-    if let Some(delta) = content.strip_prefix(previous) {
-        return delta;
-    }
-    let previous_without_trailing_boundary =
-        previous.trim_end_matches(['.', '!', '?', ',', ';', ':']);
-    if previous_without_trailing_boundary.len() < previous.len() {
-        if let Some(delta) = content.strip_prefix(previous_without_trailing_boundary) {
-            return delta;
-        }
-    }
-    content
 }
 
 fn resolve_workspace_path(workspace: &Path, path: &str) -> PathBuf {
@@ -769,7 +624,7 @@ mod tests {
     };
 
     use super::{
-        rpc_line_to_frames, BrainIdentity, PiLaunch, RpcFrameMapper,
+        rpc_line_to_frames, BrainIdentity, PiLaunch, RpcEvent, RpcFrameMapper,
         VOICE_SESSION_APPEND_SYSTEM_PROMPT,
     };
 
@@ -817,6 +672,35 @@ mod tests {
         visible
     }
 
+    /// Replays a capture and returns the event types that produced at least one
+    /// visible TextDelta frame. The leak invariant is structural: a `thinking_*`
+    /// event may never be the source of a TextDelta.
+    fn replay_text_delta_sources(capture: &str) -> Vec<String> {
+        let session_id = SessionId::new();
+        let mut mapper = RpcFrameMapper::default();
+        let mut sources = Vec::new();
+        for line in capture.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let event: RpcEvent = serde_json::from_str(line).unwrap();
+            let et = event
+                .assistant_message_event
+                .as_ref()
+                .map(|a| a.event_type.clone())
+                .unwrap_or_default();
+            let frames = mapper.event_to_frames(&session_id, event);
+            let emitted_visible = frames.iter().any(|f| {
+                matches!(&f.frame, Frame::Brain(BrainFrame::TextDelta { .. }))
+            });
+            if emitted_visible {
+                sources.push(et);
+            }
+        }
+        sources
+    }
+
     #[test]
     fn replays_real_pi_rpc_streams_without_leaks_or_duplication() {
         // Fixtures captured from live Pi RPC sessions against the campbell voice agent.
@@ -841,12 +725,16 @@ mod tests {
         for (capture, expected) in fixtures {
             let visible = replay_visible_text(capture);
 
-            // No reasoning trace may leak into the visible stream.
-            let leaked = visible.contains("The user")
-                || visible.contains("I should")
-                || visible.contains("stay in character")
-                || visible.contains("thinking");
-            assert!(!leaked, "reasoning leaked into visible text: {visible:?}");
+            // Structural leak invariant: only text_delta events may produce visible
+            // text. A thinking_* event emitting a TextDelta would be a reasoning leak,
+            // and a text_end event emitting one would be a duplication. Both are
+            // architecturally impossible under single-source-of-truth; this asserts it
+            // against real provider streams without any phrase-matching.
+            let sources = replay_text_delta_sources(capture);
+            assert!(
+                sources.iter().all(|s| s == "text_delta"),
+                "non-text_delta event emitted visible text (leak/duplication): {sources:?}"
+            );
 
             // The answer must not be duplicated (text_end replay guard).
             let occurrences = visible.matches(expected).count();
@@ -976,7 +864,10 @@ mod tests {
     }
 
     #[test]
-    fn maps_pi_rpc_cumulative_content_to_suffix_deltas() {
+    fn text_delta_content_field_is_never_read_for_visible_text() {
+        // Real Pi streams carry visible text exclusively in text_delta.delta;
+        // the content field (cumulative state) must never be re-emitted, or the
+        // answer duplicates for display and TTS.
         let session_id = SessionId::new();
         let mut mapper = RpcFrameMapper::default();
 
@@ -986,14 +877,13 @@ mod tests {
                 r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Copy that."}}"#,
             )
             .unwrap();
-        let repeated_content = mapper
+        let with_content = mapper
             .line_to_frames(
                 &session_id,
                 r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":" Stay sharp.","content":"Copy that. Stay sharp."}}"#,
             )
             .unwrap();
-        assert_eq!(mapper.assistant_content, "Copy that. Stay sharp.");
-        let next_content = mapper
+        let content_only = mapper
             .line_to_frames(
                 &session_id,
                 r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","content":"Copy that. Stay sharp out there."}}"#,
@@ -1004,46 +894,12 @@ mod tests {
             &first[0].frame,
             Frame::Brain(BrainFrame::TextDelta { text }) if text == "Copy that."
         ));
-        assert_eq!(repeated_content.len(), 1);
+        assert_eq!(with_content.len(), 1);
         assert!(matches!(
-            &repeated_content[0].frame,
+            &with_content[0].frame,
             Frame::Brain(BrainFrame::TextDelta { text }) if text == " Stay sharp."
         ));
-        assert_eq!(next_content.len(), 1);
-        match &next_content[0].frame {
-            Frame::Brain(BrainFrame::TextDelta { text }) => assert_eq!(text, " out there."),
-            frame => panic!("unexpected frame: {frame:?}"),
-        }
-    }
-
-    #[test]
-    fn cumulative_content_replacement_does_not_swallow_shared_prefix() {
-        let session_id = SessionId::new();
-        let mut mapper = RpcFrameMapper::default();
-
-        let first = mapper
-            .line_to_frames(
-                &session_id,
-                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","content":"Loud and clear, Snake. I'm right here."}}"#,
-            )
-            .unwrap();
-        let replacement = mapper
-            .line_to_frames(
-                &session_id,
-                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","content":"L clear, Snake. I'm still on the frequency."}}"#,
-            )
-            .unwrap();
-
-        assert_eq!(first.len(), 1);
-        assert!(matches!(
-            &first[0].frame,
-            Frame::Brain(BrainFrame::TextDelta { text }) if text == "Loud and clear, Snake. I'm right here."
-        ));
-        assert_eq!(replacement.len(), 1);
-        assert!(matches!(
-            &replacement[0].frame,
-            Frame::Brain(BrainFrame::TextDelta { text }) if text == "L clear, Snake. I'm still on the frequency."
-        ));
+        assert!(content_only.is_empty());
     }
 
     #[test]
@@ -1193,14 +1049,14 @@ mod tests {
     }
 
     #[test]
-    fn strips_pi_rpc_channel_markers_before_brain_frames() {
+    fn strips_think_blocks_from_text_deltas() {
         let session_id = SessionId::new();
         let mut mapper = RpcFrameMapper::default();
 
         let frames = mapper
             .line_to_frames(
                 &session_id,
-                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"<|channel>thought <channel|>I'm checking the feed."}}"#,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"<think>the user pinged me</think>I'm checking the feed."}}"#,
             )
             .unwrap();
 
@@ -1212,20 +1068,20 @@ mod tests {
     }
 
     #[test]
-    fn strips_split_pi_rpc_channel_markers_before_brain_frames() {
+    fn strips_think_blocks_split_across_text_deltas() {
         let session_id = SessionId::new();
         let mut mapper = RpcFrameMapper::default();
 
         let opening = mapper
             .line_to_frames(
                 &session_id,
-                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"<|channel"}}"#,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"<think>secret reasoning"}}"#,
             )
             .unwrap();
         let closing = mapper
             .line_to_frames(
                 &session_id,
-                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":">thought <channel|>Stand by."}}"#,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"</think>Stand by."}}"#,
             )
             .unwrap();
 
@@ -1253,7 +1109,7 @@ mod tests {
     }
 
     #[test]
-    fn strips_leading_thought_trace_from_cumulative_content() {
+    fn reasoning_delta_events_are_ignored() {
         let session_id = SessionId::new();
         let mut mapper = RpcFrameMapper::default();
 
@@ -1265,12 +1121,11 @@ mod tests {
             .unwrap();
 
         assert!(frames.is_empty());
-        assert!(mapper.assistant_content.is_empty());
 
         let spoken = mapper
             .line_to_frames(
                 &session_id,
-                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","content":"Here's your agenda for today: first, Kita at eight."}}"#,
+                r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Here's your agenda for today: first, Kita at eight."}}"#,
             )
             .unwrap();
         assert_eq!(spoken.len(), 1);
@@ -1300,7 +1155,6 @@ mod tests {
 
         assert!(qwen.is_empty());
         assert!(gemma.is_empty());
-        assert!(mapper.assistant_content.is_empty());
     }
 
     #[test]

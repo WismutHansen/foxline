@@ -491,7 +491,6 @@ struct LiveSessionState {
     persona: Option<String>,
     assistant_started: bool,
     saw_brain_first_token: bool,
-    assistant_text: AssistantTextAccumulator,
     sentence_buffer: SentenceBuffer,
 }
 
@@ -502,7 +501,6 @@ impl LiveSessionState {
             persona: None,
             assistant_started: false,
             saw_brain_first_token: false,
-            assistant_text: AssistantTextAccumulator::default(),
             sentence_buffer: SentenceBuffer::default(),
         }
     }
@@ -510,60 +508,8 @@ impl LiveSessionState {
     fn reset_assistant(&mut self) {
         self.assistant_started = false;
         self.saw_brain_first_token = false;
-        self.assistant_text.clear();
         self.sentence_buffer.clear();
     }
-}
-
-#[derive(Default)]
-struct AssistantTextAccumulator {
-    text: String,
-}
-
-impl AssistantTextAccumulator {
-    fn push(&mut self, incoming: &str) -> Option<String> {
-        const MIN_DEDUPE_CHARS: usize = 12;
-
-        if incoming.is_empty() {
-            return None;
-        }
-        if self.text.is_empty() {
-            self.text.push_str(incoming);
-            return Some(incoming.to_string());
-        }
-        if incoming.starts_with(&self.text) {
-            let delta = incoming[self.text.len()..].to_string();
-            self.text.clear();
-            self.text.push_str(incoming);
-            return (!delta.is_empty()).then_some(delta);
-        }
-        if incoming.trim().chars().count() >= MIN_DEDUPE_CHARS && self.text.ends_with(incoming) {
-            return None;
-        }
-        let overlap = suffix_prefix_overlap(&self.text, incoming, MIN_DEDUPE_CHARS);
-        self.text.push_str(&incoming[overlap..]);
-        Some(incoming[overlap..].to_string()).filter(|delta| !delta.is_empty())
-    }
-
-    fn clear(&mut self) {
-        self.text.clear();
-    }
-}
-
-fn suffix_prefix_overlap(left: &str, right: &str, min_chars: usize) -> usize {
-    let right_indices: Vec<_> = right
-        .char_indices()
-        .map(|(idx, _)| idx)
-        .chain(std::iter::once(right.len()))
-        .collect();
-    let max_chars = left.chars().count().min(right.chars().count());
-    for chars in (min_chars..=max_chars).rev() {
-        let byte_len = right_indices[chars];
-        if left.ends_with(&right[..byte_len]) {
-            return byte_len;
-        }
-    }
-    0
 }
 
 #[derive(Default)]
@@ -960,9 +906,6 @@ async fn handle_runtime_frame(
                 .await?;
             }
             Frame::Brain(BrainFrame::TextDelta { text }) => {
-                let Some(text) = live.assistant_text.push(&text) else {
-                    continue;
-                };
                 if !live.assistant_started {
                     live.assistant_started = true;
                     send_event(
@@ -1342,38 +1285,8 @@ mod tests {
 
     use super::{
         model_label_from_value, model_labels_from_available_models, normalize_tts_text,
-        resolve_voice_reference, AssistantTextAccumulator, SentenceBuffer,
+        resolve_voice_reference, SentenceBuffer,
     };
-
-    #[test]
-    fn assistant_accumulator_drops_replayed_text_before_tts() {
-        let mut assistant = AssistantTextAccumulator::default();
-
-        assert_eq!(
-            assistant.push("Understood. Just keep your eyes open and don't let your guard down."),
-            Some("Understood. Just keep your eyes open and don't let your guard down.".to_string())
-        );
-        assert_eq!(
-            assistant.push("Understood. Just keep your eyes open and don't let your guard down."),
-            None
-        );
-        assert_eq!(
-            assistant.push(" I'll be standing by."),
-            Some(" I'll be standing by.".to_string())
-        );
-    }
-
-    #[test]
-    fn assistant_accumulator_converts_cumulative_content_to_delta() {
-        let mut assistant = AssistantTextAccumulator::default();
-
-        assert_eq!(assistant.push("Copy that."), Some("Copy that.".to_string()));
-        assert_eq!(
-            assistant.push("Copy that. Stay sharp out there."),
-            Some(" Stay sharp out there.".to_string())
-        );
-        assert_eq!(assistant.push(" Stay sharp out there."), None);
-    }
 
     #[test]
     fn model_label_helpers_format_pi_model_responses() {
@@ -1400,19 +1313,16 @@ mod tests {
     #[test]
     fn assistant_delta_sent_to_frontend_matches_text_sent_to_tts() {
         let pi_text = "Loud and clear, Snake. I'm right here. What's your status?";
-        let mut assistant = AssistantTextAccumulator::default();
         let mut tts = SentenceBuffer::default();
         let mut frontend_text = String::new();
         let mut tts_text = Vec::new();
 
-        for incoming in [
+        for delta in [
             "Loud and clear, Snake. I",
             "'m right here. What's your status?",
         ] {
-            if let Some(delta) = assistant.push(incoming) {
-                frontend_text.push_str(&delta);
-                tts_text.extend(tts.push(&delta));
-            }
+            frontend_text.push_str(delta);
+            tts_text.extend(tts.push(delta));
         }
         if let Some(tail) = tts.flush() {
             tts_text.push(tail);
