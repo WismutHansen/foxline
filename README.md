@@ -8,13 +8,13 @@ Default runtime models/components:
 
 - Brain (LLM): whatever `CODEC_PI_MODEL` points to in your local Pi model registry (example in this README uses LM Studio `gemma-4-26b-a4b-it`)
 - STT: Parakeet + Silero VAD
-- TTS: Python Qwen3-TTS worker using MLX (`services/qwen3_tts_worker.py`)
+- TTS: native [spqx](https://github.com/byteowlz/spqx) Qwen3-TTS worker (`rust-mlx` backend; ~96ms to first audio, 0.3s model load). The Python MLX worker (`services/qwen3_tts_worker.py`) remains as a fallback via `FOXLINE_TTS_BACKEND=qwen3-worker` or a loadout's `[adapters] tts` entry.
 
 Current platform status:
 
-- Mac-first at the moment due to the Python/MLX Qwen3-TTS worker setup but hopefully won't be too hard to port to other platforms
+- Mac-first at the moment (MLX-based STT/TTS workers) but hopefully won't be too hard to port to other platforms
 - Fully local runtime: STT/TTS/LLM can run entirely on your machine (when backed by local providers/models). ~30GB of shared memory required.
-- The Rust Qwen3-TTS implementation is not the current default runtime worker in this repo.
+- The `rust-mlx` TTS backend expects the spqx worker binary: a sibling `../spqx` release build is found automatically; otherwise set `FOXLINE_TTS_RUST_WORKER` or put `spqx-tts-worker` on `PATH`.
 
 > [!IMPORTANT]
 > This repo does not ship copyrighted Metal Gear Solid assets. You must provide legally obtained source media (PS1 NTSC/US discs, GOG installer, or an existing PC install directory).
@@ -57,9 +57,9 @@ scripts/install-assets.sh --force
 - Setup deps only: `scripts/setup-deps.sh`
 - Start STT/transcript services only: `scripts/start-services.sh`
 - Start full Rust gateway app in tmux: `just demo-rust`
-- Start legacy bridge app in tmux: `scripts/foxline`
 
-Canonical entrypoints are the scripts in `scripts/`.
+Canonical entrypoints are the scripts in `scripts/`. The legacy TypeScript
+bridge is retired (ADR 0004); the Rust Voice Gateway is the sole gateway.
 
 ## Prerequisites (macOS manual)
 
@@ -112,7 +112,7 @@ just gateway-check
 just gateway -- --bind 127.0.0.1:8780
 ```
 
-The Rust Voice Gateway is under active migration in `crates/voice_gateway`. `just demo-rust` is the primary Rust demo path; the legacy TypeScript bridge remains available through `scripts/foxline` while migration work continues. See `ARCHITECTURE.md`, `docs/migration.md`, `docs/benchmarks.md`, and `docs/foxline-loadouts.md`.
+The Rust Voice Gateway in `crates/voice_gateway` is the sole gateway and Brain path (ADR 0004); `just demo-rust` is the primary demo path. See `ARCHITECTURE.md`, `docs/vision.md`, `docs/benchmarks.md`, and `docs/foxline-loadouts.md`.
 
 ## Generated outputs
 
@@ -141,4 +141,4 @@ Foxline builds on and learns from these upstream projects:
 - [Pi coding agent (pi.dev)](https://pi.dev) by Mario Zechner and contributors: local coding-agent runtime used in RPC mode as Foxline's character brain interface.
 - [PiBot / Pipi](https://github.com/badlogic/pibot) by Mario Zechner: worker-based local voice assistant architecture, parakeet.cpp STT worker integration, and Qwen3-TTS worker design.
 - [parakeet.cpp](https://github.com/mudler/parakeet.cpp) by Ettore Di Giacinto and contributors: local C/C++ Parakeet/Nemotron ASR inference and GGUF model support.
-- [qwen3_tts_rs](https://github.com/badlogic/qwen3_tts_rs): related Rust Qwen3-TTS inference project; not currently wired as Foxline's default TTS worker.
+- [qwen3_tts_rs](https://github.com/badlogic/qwen3_tts_rs) by Mario Zechner: origin of [spqx](https://github.com/byteowlz/spqx), the byteowlz fork that is now Foxline's default TTS engine (`rust-mlx` backend).
