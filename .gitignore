@@ -62,3 +62,4 @@ Temporary Items
 # Local Codec session/trajectory logs
 sessions/
 CLAUDE.md
+benchmarks/
