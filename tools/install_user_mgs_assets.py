@@ -31,6 +31,31 @@ REFS = {
     "otacon": {"out": "Otacon_reference.wav", "sources": [(1, 868)]},
 }
 
+# Characters whose reference cannot be derived from a single VOX bank like REFS
+# above. Snake's reference DOES come from the game — disc 1 vox-0021 (a ~41s
+# multi-speaker codec exchange) — but was hand-edited to isolate only Snake's
+# voice (cut and rearranged), so it is not a contiguous bank slice the extractor
+# can reproduce. It is therefore installed by copying the curated clip.
+# `derived_from` records the true game source for provenance. Resolution order:
+# the per-character --<id>-ref flag, else the first existing path in `sources`
+# (e.g. a sibling codec repo or an already-installed reference). The clip is
+# copyrighted, so it is never committed; it must be present locally or provided
+# via the flag.
+CURATED_REFS = {
+    "snake": {
+        "out": "Snake_reference.wav",
+        "sources": [
+            "../codec/agents/snake/assets/Snake_normal.wav",
+            "agents/snake/assets/reference_audio/Snake_reference.wav",
+        ],
+        "derived_from": {
+            "disc": 1,
+            "vox": "vox-0021.wav",
+            "edit": "isolated Snake's voice from the multi-speaker codec exchange",
+        },
+    },
+}
+
 
 def run(cmd: list[object], *, cwd: Path = ROOT) -> None:
     print("+", " ".join(map(str, cmd)))
@@ -102,6 +127,51 @@ def install_reference_audio(source: str, psx_out: Path, pc_out: Path, install_ma
         out.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         refs.append({**meta, "target": str(out.relative_to(ROOT))})
         print(f"reference {agent}: {out}")
+    install_manifest["referenceAudio"] = refs
+
+
+def install_curated_reference_audio(
+    overrides: dict[str, Path], install_manifest: dict[str, object]
+) -> None:
+    """Install references that are not derivable from VOX.DAT banks by copying a
+    curated source clip (plus its `.wav.txt` transcript sidecar when present)."""
+    refs = list(install_manifest.get("referenceAudio", []))  # type: ignore[arg-type]
+    for agent, spec in CURATED_REFS.items():
+        candidates: list[Path] = []
+        if agent in overrides:
+            candidates.append(overrides[agent])
+        for s in spec["sources"]:
+            p = Path(s)
+            candidates.append(p if p.is_absolute() else ROOT / p)
+        chosen = next((p for p in candidates if p.exists()), None)
+        if chosen is None:
+            print(
+                f"warning: no curated source for {agent}; skipping. "
+                f"{agent.capitalize()}'s reference is not in the game VOX banks — "
+                f"provide it with --{agent}-ref PATH."
+            )
+            continue
+        out_dir = ROOT / "agents" / agent / "assets" / "reference_audio"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / spec["out"]
+        # Avoid a no-op self-copy when the source already is the install target.
+        if chosen.resolve() != out.resolve():
+            shutil.copy2(chosen, out)
+        src_txt = chosen.with_suffix(chosen.suffix + ".txt")
+        if src_txt.exists():
+            shutil.copy2(src_txt, out.with_suffix(out.suffix + ".txt"))
+        meta = {
+            "character": agent,
+            "installedFrom": "curated",
+            "sourceFiles": [
+                str(chosen.relative_to(ROOT) if chosen.is_relative_to(ROOT) else chosen)
+            ],
+            "selection": "curated_reference_edited_from_vox",
+            "derivedFrom": spec.get("derived_from"),
+        }
+        out.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        refs.append({**meta, "target": str(out.relative_to(ROOT))})
+        print(f"reference {agent} (curated): {out}")
     install_manifest["referenceAudio"] = refs
 
 
@@ -235,12 +305,22 @@ def main() -> None:
     p.add_argument("--psx-disc2", type=Path)
     p.add_argument("--psx-out", type=Path, default=Path("assets/generated/mgs"))
     p.add_argument("--pc-out", type=Path, default=Path("assets/generated/mgs_pc"))
+    p.add_argument(
+        "--snake-ref",
+        type=Path,
+        help="Curated Snake reference clip (his codec voice is not in VOX.DAT). "
+        "Defaults to a sibling ../codec copy or an already-installed reference.",
+    )
     p.add_argument("--transcribe", action="store_true", help="Generate .wav.txt transcripts through Parakeet STT server")
     p.add_argument("--parakeet-url", default="http://127.0.0.1:8780")
     p.add_argument("--generate-fillers", action="store_true", help="Generate filler snippets through the current Qwen3-TTS filler generator")
     p.add_argument("--skip-sfx", action="store_true", help="Skip rendering game sound effects from the PSX disc")
     p.add_argument("--skip-music", action="store_true", help="Skip rendering game music (saves several minutes)")
     args = p.parse_args()
+
+    curated_overrides: dict[str, Path] = {}
+    if args.snake_ref:
+        curated_overrides["snake"] = args.snake_ref
 
     manifest: dict[str, object] = {"sourceType": "psx" if args.psx_disc1 else "pc", "generated": {}}
     if args.psx_disc1:
@@ -249,12 +329,14 @@ def main() -> None:
         psx_extract(args)
         manifest["generated"] = {"psx": str(args.psx_out)}
         install_reference_audio("psx", args.psx_out, args.pc_out, manifest)
+        install_curated_reference_audio(curated_overrides, manifest)
         if not args.skip_sfx:
             psx_render_sfx(args, manifest)
     else:
         pc_extract(args)
         manifest["generated"] = {"pc": str(args.pc_out)}
         install_reference_audio("pc", args.psx_out, args.pc_out, manifest)
+        install_curated_reference_audio(curated_overrides, manifest)
         if not args.skip_sfx:
             pc_install_sfx_fallback(args, manifest)
         if not args.skip_music:

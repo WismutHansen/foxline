@@ -17,6 +17,14 @@
       "enabled": true
     },
     {
+      "id": "snake",
+      "displayName": "Solid Snake",
+      "speakerName": "Snake",
+      "frequency": "140.48",
+      "avatar": "snake_serious",
+      "enabled": true
+    },
+    {
       "id": "campbell",
       "displayName": "Roy Campbell",
       "speakerName": "Colonel",
