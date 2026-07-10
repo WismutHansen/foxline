@@ -766,9 +766,9 @@ mod tests {
                 .map(|a| a.event_type.clone())
                 .unwrap_or_default();
             let frames = mapper.event_to_frames(&session_id, event);
-            let emitted_visible = frames.iter().any(|f| {
-                matches!(&f.frame, Frame::Brain(BrainFrame::TextDelta { .. }))
-            });
+            let emitted_visible = frames
+                .iter()
+                .any(|f| matches!(&f.frame, Frame::Brain(BrainFrame::TextDelta { .. })));
             if emitted_visible {
                 sources.push(et);
             }
