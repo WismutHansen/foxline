@@ -95,6 +95,7 @@ async fn handle_connection(
                     &mut pipeline,
                     &trace,
                     &avatar_router,
+                    config.debug_traces,
                     &mut live,
                     brain.as_ref(),
                     &mut stt,
@@ -353,6 +354,7 @@ async fn handle_connection(
                             &mut pipeline,
                             &trace,
                             &avatar_router,
+                            config.debug_traces,
                             &mut live,
                             brain.as_ref(),
                             &mut tts,
@@ -386,6 +388,7 @@ async fn handle_connection(
                             &mut pipeline,
                             &trace,
                             &avatar_router,
+                            config.debug_traces,
                             &mut live,
                             brain.as_ref(),
                             &mut tts,
@@ -455,6 +458,7 @@ async fn handle_connection(
                             &mut pipeline,
                             &trace,
                             &avatar_router,
+                            config.debug_traces,
                             &mut live,
                             brain.as_ref(),
                             &mut tts,
@@ -467,6 +471,7 @@ async fn handle_connection(
                     &mut pipeline,
                     &trace,
                     &avatar_router,
+                    config.debug_traces,
                     &mut live,
                     brain.as_ref(),
                     &mut tts,
@@ -492,6 +497,7 @@ struct LiveSessionState {
     assistant_started: bool,
     saw_brain_first_token: bool,
     sentence_buffer: SentenceBuffer,
+    tts_segment_index: u64,
 }
 
 impl LiveSessionState {
@@ -502,6 +508,7 @@ impl LiveSessionState {
             assistant_started: false,
             saw_brain_first_token: false,
             sentence_buffer: SentenceBuffer::default(),
+            tts_segment_index: 0,
         }
     }
 
@@ -509,6 +516,7 @@ impl LiveSessionState {
         self.assistant_started = false;
         self.saw_brain_first_token = false;
         self.sentence_buffer.clear();
+        self.tts_segment_index = 0;
     }
 }
 
@@ -763,6 +771,7 @@ async fn drain_adapter_frames(
     pipeline: &mut LinearPipeline,
     trace: &TraceWriter,
     avatar_router: &AvatarActionRouter,
+    debug_traces: bool,
     live: &mut LiveSessionState,
     brain: Option<&Arc<Mutex<PiRpcBrain>>>,
     stt: &mut Option<Box<dyn SttAdapter>>,
@@ -770,8 +779,18 @@ async fn drain_adapter_frames(
 ) -> Result<()> {
     if let Some(stt) = stt.as_deref_mut() {
         while let Some(frame) = stt.try_next_frame() {
-            handle_runtime_frame(ws, pipeline, trace, avatar_router, live, brain, tts, frame)
-                .await?;
+            handle_runtime_frame(
+                ws,
+                pipeline,
+                trace,
+                avatar_router,
+                debug_traces,
+                live,
+                brain,
+                tts,
+                frame,
+            )
+            .await?;
         }
     }
     if let Some(brain) = brain {
@@ -783,6 +802,7 @@ async fn drain_adapter_frames(
                 pipeline,
                 trace,
                 avatar_router,
+                debug_traces,
                 live,
                 Some(brain),
                 tts,
@@ -800,6 +820,7 @@ async fn drain_adapter_frames(
             pipeline,
             trace,
             avatar_router,
+            debug_traces,
             live,
             brain,
             &mut no_tts,
@@ -815,6 +836,7 @@ async fn handle_runtime_frame(
     pipeline: &mut LinearPipeline,
     trace: &TraceWriter,
     avatar_router: &AvatarActionRouter,
+    debug_traces: bool,
     live: &mut LiveSessionState,
     brain: Option<&Arc<Mutex<PiRpcBrain>>>,
     tts: &mut Option<Box<dyn TtsAdapter>>,
@@ -933,6 +955,18 @@ async fn handle_runtime_frame(
                 if let Some(tts) = tts.as_deref_mut() {
                     for sentence in live.sentence_buffer.push(&text) {
                         if let Some(tts_text) = normalize_tts_text(&sentence) {
+                            live.tts_segment_index += 1;
+                            if debug_traces {
+                                trace.event(
+                                    "tts_segment_queued",
+                                    json!({
+                                        "segment_index": live.tts_segment_index,
+                                        "reason": "sentence_boundary",
+                                        "raw_text": sentence,
+                                        "normalized_text": tts_text,
+                                    }),
+                                )?;
+                            }
                             let request = tts.speak(frame.session_id.clone(), tts_text).await?;
                             process_pipeline_outputs(ws, pipeline, trace, avatar_router, request)
                                 .await?;
@@ -944,6 +978,18 @@ async fn handle_runtime_frame(
                 if let (Some(tts), Some(text)) = (tts.as_deref_mut(), live.sentence_buffer.flush())
                 {
                     if let Some(tts_text) = normalize_tts_text(&text) {
+                        live.tts_segment_index += 1;
+                        if debug_traces {
+                            trace.event(
+                                "tts_segment_queued",
+                                json!({
+                                    "segment_index": live.tts_segment_index,
+                                    "reason": "turn_done_flush",
+                                    "raw_text": text,
+                                    "normalized_text": tts_text,
+                                }),
+                            )?;
+                        }
                         let request = tts.speak(frame.session_id.clone(), tts_text).await?;
                         process_pipeline_outputs(ws, pipeline, trace, avatar_router, request)
                             .await?;
@@ -1179,7 +1225,8 @@ fn build_tts_adapter(
 }
 
 /// Locate the native spqx TTS worker: explicit env, then the sibling spqx
-/// checkout's release build, then PATH.
+/// checkout's release build, then PATH, then an auto-fetched release binary
+/// cached under `dirs::cache_dir()/foxline/spqx`.
 fn resolve_rust_tts_worker(repo: &Path) -> Result<PathBuf> {
     if let Ok(path) = env::var("FOXLINE_TTS_RUST_WORKER") {
         let path = PathBuf::from(path);
@@ -1208,12 +1255,177 @@ fn resolve_rust_tts_worker(repo: &Path) -> Result<PathBuf> {
             }
         }
     }
-    anyhow::bail!(
+    fetch_cached_spqx_worker().context(
         "rust-mlx TTS backend selected but no worker binary found: set \
          FOXLINE_TTS_RUST_WORKER, build ../spqx (cargo build --release \
-         --no-default-features --features mlx --bin spqx-tts-worker), or put \
-         spqx-tts-worker on PATH"
+         --no-default-features --features mlx --bin spqx-tts-worker), put \
+         spqx-tts-worker on PATH, or fix the prebuilt-release fetch (see cause)"
     )
+}
+
+const SPQX_RELEASE_REPO: &str = "byteowlz/spqx";
+const SPQX_WORKER_BIN_NAME: &str = "spqx-tts-worker";
+
+fn spqx_cache_dir() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from(".cache"))
+        .join("foxline")
+        .join("spqx")
+}
+
+fn current_spqx_target_triple() -> Result<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
+        ("macos", "x86_64") => Ok("x86_64-apple-darwin"),
+        ("linux", "x86_64") => Ok("x86_64-unknown-linux-gnu"),
+        ("linux", "aarch64") => Ok("aarch64-unknown-linux-gnu"),
+        (os, arch) => anyhow::bail!("no prebuilt spqx release published for {os}/{arch}"),
+    }
+}
+
+#[derive(Deserialize)]
+struct GithubReleaseAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    assets: Vec<GithubReleaseAsset>,
+}
+
+fn fetch_github_release(version: &str) -> Result<GithubRelease> {
+    let url = if version == "latest" {
+        format!("https://api.github.com/repos/{SPQX_RELEASE_REPO}/releases/latest")
+    } else {
+        format!("https://api.github.com/repos/{SPQX_RELEASE_REPO}/releases/tags/{version}")
+    };
+    ureq::get(&url)
+        .set("User-Agent", "foxline-voice-gateway")
+        .call()
+        .with_context(|| format!("fetching spqx release metadata from {url}"))?
+        .into_json()
+        .with_context(|| format!("parsing spqx release metadata from {url}"))
+}
+
+fn download_string(url: &str) -> Result<String> {
+    ureq::get(url)
+        .set("User-Agent", "foxline-voice-gateway")
+        .call()
+        .with_context(|| format!("downloading {url}"))?
+        .into_string()
+        .with_context(|| format!("reading {url}"))
+}
+
+fn download_bytes(url: &str) -> Result<Vec<u8>> {
+    let response = ureq::get(url)
+        .set("User-Agent", "foxline-voice-gateway")
+        .call()
+        .with_context(|| format!("downloading {url}"))?;
+    let mut buf = Vec::new();
+    std::io::Read::read_to_end(&mut response.into_reader(), &mut buf)
+        .with_context(|| format!("reading {url}"))?;
+    Ok(buf)
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Fetch (if needed) and return the cached spqx-tts-worker binary. Tracks
+/// GitHub's latest release by default so foxline stays in sync with spqx
+/// without a manual version bump; `FOXLINE_SPQX_VERSION` pins/rolls back to a
+/// specific tag, and `FOXLINE_SPQX_REFRESH=1` forces a re-check even when a
+/// cached binary already exists (normal boots never touch the network once
+/// a binary is cached).
+fn fetch_cached_spqx_worker() -> Result<PathBuf> {
+    let cache_dir = spqx_cache_dir();
+    let bin_path = cache_dir.join("bin").join(SPQX_WORKER_BIN_NAME);
+    let version_marker = cache_dir.join("version");
+    let requested_version =
+        env::var("FOXLINE_SPQX_VERSION").unwrap_or_else(|_| "latest".to_string());
+    let force_refresh = env::var("FOXLINE_SPQX_REFRESH").as_deref() == Ok("1");
+
+    if bin_path.exists() && !force_refresh && requested_version == "latest" {
+        return Ok(bin_path);
+    }
+
+    let triple = current_spqx_target_triple()?;
+    let release = fetch_github_release(&requested_version)?;
+    let tag = release.tag_name;
+    let version = tag.trim_start_matches('v').to_string();
+
+    if bin_path.exists() && !force_refresh {
+        if let Ok(cached_version) = std::fs::read_to_string(&version_marker) {
+            if cached_version.trim() == version {
+                return Ok(bin_path);
+            }
+        }
+    }
+
+    let tarball_name = format!("spqx-{tag}-{triple}.tar.gz");
+    let tarball_asset = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == tarball_name)
+        .with_context(|| format!("no {tarball_name} asset on spqx release {tag}"))?;
+    let checksums_asset = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == "checksums.txt")
+        .with_context(|| format!("no checksums.txt asset on spqx release {tag}"))?;
+
+    info!(tag = %tag, triple, "fetching spqx-tts-worker release binary");
+
+    let checksums = download_string(&checksums_asset.browser_download_url)?;
+    let expected_sha256 = checksums
+        .lines()
+        .find_map(|line| {
+            let (sha, name) = line.split_once("  ")?;
+            (name == tarball_name).then(|| sha.to_string())
+        })
+        .with_context(|| format!("{tarball_name} not listed in checksums.txt for {tag}"))?;
+
+    let tarball = download_bytes(&tarball_asset.browser_download_url)?;
+    let actual_sha256 = sha256_hex(&tarball);
+    anyhow::ensure!(
+        actual_sha256 == expected_sha256,
+        "checksum mismatch for {tarball_name}: expected {expected_sha256}, got {actual_sha256}"
+    );
+
+    let extract_dir = cache_dir.join("extract");
+    let _ = std::fs::remove_dir_all(&extract_dir);
+    std::fs::create_dir_all(&extract_dir)?;
+    tar::Archive::new(flate2::read::GzDecoder::new(tarball.as_slice())).unpack(&extract_dir)?;
+
+    let staged_bin = extract_dir
+        .join(format!("spqx-{tag}-{triple}"))
+        .join("bin")
+        .join(SPQX_WORKER_BIN_NAME);
+    anyhow::ensure!(
+        staged_bin.exists(),
+        "extracted spqx release archive is missing bin/{SPQX_WORKER_BIN_NAME}"
+    );
+
+    std::fs::create_dir_all(cache_dir.join("bin"))?;
+    std::fs::copy(&staged_bin, &bin_path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin_path, std::fs::Permissions::from_mode(0o755))?;
+    }
+    std::fs::write(&version_marker, &version)?;
+    let _ = std::fs::remove_dir_all(&extract_dir);
+
+    Ok(bin_path)
 }
 
 /// Resolve a Hugging Face model id to its local cache snapshot directory.
@@ -1376,9 +1588,37 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        model_label_from_value, model_labels_from_available_models, normalize_tts_text,
-        resolve_voice_reference, SentenceBuffer,
+        fetch_cached_spqx_worker, model_label_from_value, model_labels_from_available_models,
+        normalize_tts_text, resolve_voice_reference, SentenceBuffer,
     };
+
+    #[test]
+    #[ignore = "hits the real GitHub API/CDN; run manually with --ignored"]
+    fn fetch_cached_spqx_worker_downloads_and_verifies_latest_release() {
+        let cache = tempdir().unwrap();
+        // dirs::cache_dir() derives from $HOME on macOS (not XDG_CACHE_HOME);
+        // override HOME so this test doesn't touch the real user cache.
+        std::env::set_var("HOME", cache.path());
+        std::env::set_var("XDG_CACHE_HOME", cache.path());
+        std::env::remove_var("FOXLINE_SPQX_VERSION");
+        std::env::remove_var("FOXLINE_SPQX_REFRESH");
+
+        let bin_path = fetch_cached_spqx_worker().expect("first fetch should succeed");
+        assert!(bin_path.exists());
+        let output = std::process::Command::new(&bin_path)
+            .arg("--help")
+            .output()
+            .expect("downloaded binary should run");
+        assert!(output.status.success());
+
+        // Second call must be cache-only (no network) since version == "latest"
+        // and the binary is already present.
+        let cached_again = fetch_cached_spqx_worker().expect("cached fetch should succeed");
+        assert_eq!(bin_path, cached_again);
+
+        std::env::remove_var("HOME");
+        std::env::remove_var("XDG_CACHE_HOME");
+    }
 
     #[test]
     fn model_label_helpers_format_pi_model_responses() {
