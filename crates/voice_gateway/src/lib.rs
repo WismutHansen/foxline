@@ -1,11 +1,11 @@
 pub mod avatar;
 pub mod brain;
-pub mod think_block_filter;
 pub mod config;
 pub mod frame;
 pub mod loadout;
 pub mod pipeline;
 pub mod stt;
+pub mod think_block_filter;
 pub mod tools;
 pub mod trace;
 pub mod tts;
