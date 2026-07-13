@@ -18,6 +18,8 @@ crates/protocol/bindings/
 sources/
 assets/generated/
 personas/_voice-candidates/
+# Contains transcribed copyrighted game dialogue (STT benchmark scratch output)
+reports/parakeet-rs-spike/
 agents/*/assets/avatar/
 agents/*/assets/reference_audio/
 agents/*/assets/filler/
