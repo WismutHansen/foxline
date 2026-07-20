@@ -56,7 +56,8 @@ scripts/install-assets.sh --force
 
 - Setup deps only: `scripts/setup-deps.sh`
 - Start STT/transcript services only: `scripts/start-services.sh`
-- Start full Rust gateway app in tmux: `just demo-rust`
+- Start Codec, STT, and the Rust gateway in tmux: `just demo-rust`
+- Start Overlayz, STT, and the Rust gateway: `just run overlayz`
 
 Canonical entrypoints are the scripts in `scripts/`. The legacy TypeScript
 bridge is retired (ADR 0004); the Rust Voice Gateway is the sole gateway.

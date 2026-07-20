@@ -71,13 +71,14 @@ allowed_pi = ["read", "write"]
 
 `start_session` takes an `agent` for the Pi-backed Brain and an optional `persona` for voice/presentation. When `persona` is omitted, it defaults to `agent`.
 
-Personas are package directories with a `persona.toml` manifest. A package can include prompt files, voice references, and frontend-specific config or assets in one place. The gateway understands only the generic, prompt, and voice fields; frontend-specific sections or files are routed to matching frontends as opaque data.
+Personas are package directories with a `persona.toml` manifest. A package can include prompt files, voice references, and frontend-specific config or assets in one place. The current gateway resolves the package by Persona id and reads its voice-reference fields. Persona `prompt_file` composition and frontend-specific manifest routing remain planned; today the Brain personality comes from the Agent workspace and its loadout, including `pi.append_system_prompt_file`.
 
 Example:
 
 ```toml
 id = "radio-operator"
 display_name = "Radio Operator"
+# Reserved for Persona prompt composition; not injected by the current gateway.
 prompt_file = "SYSTEM.md"
 
 [voice]
@@ -98,16 +99,17 @@ config = "codec/persona.toml"
 portrait = "codec/portrait.png"
 ```
 
-`voice.reference_audio` and `voice.reference_text` define the default TTS reference used by the gateway. `voice.variants` can list additional shippable references for clients or installers that want to expose voice choices.
+`voice.reference_audio` and `voice.reference_text` define the default TTS reference used by the gateway. `voice.variants` documents additional shippable references for clients or installers; automatic variant selection is not currently implemented.
 
-Persona package lookup checks:
+Current Persona/reference lookup checks:
 
 1. `<workspace>/.foxline/personas/<persona>`
-2. `$XDG_CONFIG_HOME/foxline/personas/<persona>`
-3. `/etc/foxline/personas/<persona>`
-4. app-bundled or repo-bundled demo personas
+2. `<workspace>/personas/<persona>`
+3. `<workspace>/agents/<persona>`
+4. `<repo>/personas/<persona>`
+5. `<repo>/agents/<persona>`
 
-Workspace-local packages override centrally installed packages. This lets installed systems reuse personas across many Agent workspaces while allowing project-specific Persona overrides.
+The first matching manifest or reference-audio directory wins. XDG-wide and `/etc` Persona installation are planned but are not implemented by the current resolver.
 
 The repo ships original demo Persona packages under `personas/` for users without game-disc assets. These packages may include generated Codec portraits and Koko/Kokoro-generated reference voices, but must not include copyrighted extracted runtime assets.
 

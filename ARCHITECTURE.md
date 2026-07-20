@@ -3,7 +3,7 @@
 Foxline follows PiBot's low-latency worker architecture rather than HTTP microservices. The Rust Voice Gateway is the sole gateway and Brain path; the legacy TypeScript bridge has been retired.
 
 ```text
-Frontend Skin (apps/codec, future apps/overlayz)
+Frontend Skin (apps/codec or apps/overlayz)
   -> @foxline/voice-client
       -> foxline-voice-gateway WebSocket
           -> canonical frame pipeline
