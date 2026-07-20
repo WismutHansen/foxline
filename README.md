@@ -61,8 +61,23 @@ scripts/install-assets.sh --force
 - Run the installed gateway/STT stack in the foreground: `foxline service run`
 - Manage macOS login startup: `foxline service enable --now`, `status`, `restart`, or `disable --now`
 
-Canonical entrypoints are the scripts in `scripts/`. The legacy TypeScript
-bridge is retired (ADR 0004); the Rust Voice Gateway is the sole gateway.
+Install the management CLI from a checkout:
+
+```bash
+cargo install --path crates/foxline_cli
+```
+
+Run in the foreground while testing, or enable the macOS LaunchAgent:
+
+```bash
+foxline service run
+foxline service enable --now
+foxline service status
+```
+
+`foxline service run` supervises gateway-owned STT and the Voice Gateway; frontends start separately and any number may connect. `start` requires an enabled LaunchAgent, while `disable --now` stops and removes login startup.
+
+The legacy TypeScript bridge is retired (ADR 0004); the Rust Voice Gateway is the sole gateway.
 
 ## Prerequisites (macOS manual)
 

@@ -17,10 +17,10 @@ A Pi-backed working identity rooted in a workspace and Pi configuration, optiona
 _Avoid_: Character, persona
 
 **Persona**:
-The presentational identity used for voice and UI, including display name, voice assets, Persona prompt fragments, and optional frontend-specific representation.
-_Avoid_: Agent
+The gateway-owned spoken identity of a Voice Session: display name, `PROMPT.md`, TTS voice reference, and optional canned spoken responses. A Frontend Skin maps the Persona id to its own client-local presentation; portraits, animations, and other visual assets are not part of the gateway Persona.
+_Avoid_: Agent, Character, avatar package
 
-Personas can change within a frontend session without changing the Pi-backed Agent. Agent switching changes the Brain/workspace/loadout identity; Persona switching changes voice/reference assets, Persona prompt fragments, and presentation identity. Persona packages can be installed centrally and overridden per workspace.
+Personas can change within a frontend session without changing the Pi-backed Agent. Agent switching changes the Brain/workspace/loadout identity; Persona switching changes prompt, voice, and canned speech. Persona packages install under the Foxline XDG data directory and may be overridden inside a Work Directory.
 
 **Avatar Action**:
 A semantic presentation request routed through the Voice Gateway to a frontend, such as changing expression, focus, or animation, without prescribing theme-specific visuals.
@@ -67,7 +67,7 @@ The presentation and shell of a voice frontend: visuals, interaction model, and 
 _Avoid_: app, UI, frontend (say Frontend Skin when distinguishing presentation from the Client Core)
 
 **Visual Theme**:
-A swappable presentation identity inside a Frontend Skin, paired with a Persona: the visuals, animation, and interaction styling the skin renders for the active Persona. LED and Orb are Visual Themes inside Overlayz; KITT survives as a Visual Theme plus a Persona, not as an app name. Two Visual Themes today justify the theme seam as a real in-app extension point. A Visual Theme renders the active Persona; it does not own it.
+A client-owned presentation inside a Frontend Skin. LED and Orb are Visual Themes inside Overlayz; Codec owns its portrait and mouth-frame presentation. A frontend may map a gateway Persona id to a Visual Theme or use a neutral fallback. Visual assets never belong to the gateway Persona.
 _Avoid_: skin (say Visual Theme for the in-skin presentation unit; Frontend Skin for the app)
 
 **Shell**:

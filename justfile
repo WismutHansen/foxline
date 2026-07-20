@@ -5,6 +5,12 @@ default: dev
 install:
     bun install
 
+install-cli:
+    cargo install --path crates/foxline_cli
+
+service *args:
+    cargo run -p foxline-cli -- service {{args}}
+
 setup:
     scripts/setup-deps.sh
 

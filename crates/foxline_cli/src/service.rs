@@ -1,5 +1,6 @@
 use std::{
     env, fs,
+    net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -70,6 +71,8 @@ struct ServiceStatus {
     label: &'static str,
     enabled: bool,
     running: bool,
+    gateway_ready: bool,
+    stt_ready: bool,
     launch_agent: String,
 }
 
@@ -233,8 +236,19 @@ impl ServiceManager {
         let state_dir = self.home.join(".local/state/foxline");
         fs::create_dir_all(&state_dir)
             .with_context(|| format!("create {}", state_dir.display()))?;
-        fs::write(&path, self.render_plist())
-            .with_context(|| format!("write {}", path.display()))?;
+        let rendered = self.render_plist();
+        if path.exists() {
+            let existing = fs::read_to_string(&path)
+                .with_context(|| format!("read existing {}", path.display()))?;
+            if existing != rendered {
+                bail!(
+                    "{} already exists with different content; move it aside before enabling Foxline",
+                    path.display()
+                );
+            }
+        } else {
+            fs::write(&path, rendered).with_context(|| format!("write {}", path.display()))?;
+        }
         println!("Enabled Foxline at login: {}", path.display());
         if now {
             self.start(false)?;
@@ -301,19 +315,31 @@ impl ServiceManager {
             label: LABEL,
             enabled: self.plist_path().is_file(),
             running: self.is_running(),
+            gateway_ready: tcp_ready("127.0.0.1:8780"),
+            stt_ready: tcp_ready("127.0.0.1:8796"),
             launch_agent: self.plist_path().display().to_string(),
         };
         if json {
             println!("{}", serde_json::to_string_pretty(&status)?);
         } else {
             println!(
-                "Autostart: {}\nService:   {}\nLaunchAgent: {}",
+                "Autostart: {}\nService:   {}\nGateway:   {}\nSTT:       {}\nLaunchAgent: {}",
                 if status.enabled {
                     "enabled"
                 } else {
                     "disabled"
                 },
                 if status.running { "running" } else { "stopped" },
+                if status.gateway_ready {
+                    "ready"
+                } else {
+                    "unavailable"
+                },
+                if status.stt_ready {
+                    "ready"
+                } else {
+                    "unavailable"
+                },
                 status.launch_agent
             );
         }
@@ -443,6 +469,12 @@ fn terminate_child_group(child: &mut Child) {
     let _ = child.wait();
 }
 
+fn tcp_ready(address: &str) -> bool {
+    address.parse::<SocketAddr>().is_ok_and(|address| {
+        TcpStream::connect_timeout(&address, Duration::from_millis(150)).is_ok()
+    })
+}
+
 fn launchctl_description_is_running(description: &str) -> bool {
     description.lines().any(|line| {
         let line = line.trim();
@@ -502,6 +534,18 @@ mod tests {
         assert!(path.is_file());
         manager.disable(false, false).unwrap();
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn enable_refuses_to_overwrite_a_modified_launch_agent() {
+        let temp = TempDir::new().unwrap();
+        let manager = manager(&temp);
+        let path = manager.plist_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "user-managed").unwrap();
+        let error = manager.enable(false, false).unwrap_err().to_string();
+        assert!(error.contains("different content"));
+        assert_eq!(fs::read_to_string(path).unwrap(), "user-managed");
     }
 
     #[test]

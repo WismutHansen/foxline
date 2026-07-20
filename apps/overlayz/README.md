@@ -62,39 +62,40 @@ Overlayz has no frontend-owned STT, TTS, or Brain path. When launching component
 
 ## Agents, Personas, and reference voices
 
-Overlayz uses the same gateway Agent and Persona system as every other Frontend Skin; it does not maintain a separate Codec character registry.
+Overlayz selects gateway Agents and Personas but owns only their visual presentation.
 
-- `agent` selects the Pi workspace, tools, loadout, and Brain personality.
-- `persona` selects the gateway-owned TTS reference voice and presentation identity. It defaults to `agent` when empty.
-- `workspace` is the Agent workspace path.
+- `agent` selects the Pi Work Directory, tools, loadout, and operational identity.
+- `persona` selects the gateway-owned `PROMPT.md`, voice, and canned speech. It defaults to `agent` when empty.
+- `workspace` currently carries the registered Work Directory path in Protocol v1.
 
-To give KITT both a distinct Brain personality and voice, use a KITT Agent workspace plus a local, ignored reference recording:
+Install a KITT Persona on the gateway machine:
 
 ```text
-agents/kitt/
-├── AGENTS.md
-├── SYSTEM.md
-├── .foxline/
-│   └── loadout.toml
-└── assets/
-    └── reference_audio/
-        ├── kitt.wav
-        └── kitt.wav.txt
+~/.local/share/foxline/personas/kitt/
+├── persona.toml
+├── PROMPT.md
+├── voice/
+│   ├── reference.wav
+│   └── reference.txt
+└── canned/
+    ├── tool-started/
+    ├── tool-slow/
+    └── tool-completed/
 ```
 
-Files under `agents/*/assets/reference_audio/` are intentionally gitignored because they may be generated, private, or copyrighted. The transcript in `kitt.wav.txt` must exactly match the spoken content of `kitt.wav`. Commit only the Agent metadata and prompts you have the right to distribute.
+The reference transcript must exactly match the WAV. Keep copyrighted or private recordings in user data and out of this repository. Overlayz maps the `kitt` Persona id to its local LED presentation; the gateway never reads Overlayz visual assets.
 
-Then select both identities in Overlayz:
+Then select the Agent and Persona in Overlayz:
 
 ```toml
 [foxline]
 url = "ws://127.0.0.1:8780"
-agent = "kitt"
+agent = "assistant"
 persona = "kitt"
-workspace = "agents/kitt"
+workspace = "/Users/you/work/your-project"
 loadout = "default"
 ```
 
-The Agent personality currently comes from the selected workspace and loadout, including `SYSTEM.md` when configured through `pi.append_system_prompt_file`. Persona `prompt_file` composition and automatic Persona-to-Visual-Theme selection are not yet implemented; select the LED or Orb Visual Theme in Overlayz itself.
+The gateway composes the Work Directory/Agent instructions with the selected Persona's `PROMPT.md`. Select the LED or Orb Visual Theme in Overlayz; presentation remains client-local.
 
 See `docs/foxline-loadouts.md` for loadout and Persona lookup rules.

@@ -69,47 +69,53 @@ allowed_pi = ["read", "write"]
 
 ## Persona packages
 
-`start_session` takes an `agent` for the Pi-backed Brain and an optional `persona` for voice/presentation. When `persona` is omitted, it defaults to `agent`.
+`start_session` takes an `agent` for the Pi-backed Brain and an optional `persona` for gateway-owned prompt, voice, and canned speech. When `persona` is omitted, it defaults to `agent`. Frontend presentation is client-local and keyed by the Persona id.
 
-Personas are package directories with a `persona.toml` manifest. A package can include prompt files, voice references, and frontend-specific config or assets in one place. The current gateway resolves the package by Persona id and reads its voice-reference fields. Persona `prompt_file` composition and frontend-specific manifest routing remain planned; today the Brain personality comes from the Agent workspace and its loadout, including `pi.append_system_prompt_file`.
+Personas are gateway-owned spoken identities. A package contains a fixed `PROMPT.md`, a `persona.toml` voice/canned-speech manifest, and optional audio. Frontend portraits and animations remain in each client and are mapped by Persona id.
 
 Example:
+
+```text
+$XDG_DATA_HOME/foxline/personas/radio-operator/
+├── persona.toml
+├── PROMPT.md
+├── voice/
+│   ├── reference.wav
+│   └── reference.txt
+└── canned/
+    ├── tool-started/
+    ├── tool-slow/
+    └── tool-completed/
+```
 
 ```toml
 id = "radio-operator"
 display_name = "Radio Operator"
-# Reserved for Persona prompt composition; not injected by the current gateway.
-prompt_file = "SYSTEM.md"
 
 [voice]
-adapter = "qwen3-worker"
-reference_audio_dir = "voice/reference_audio"
-reference_audio = "voice/reference_audio/radio-operator-a.wav"
-reference_text = "voice/reference_audio/reference.txt"
+reference_audio = "voice/reference.wav"
+reference_text = "voice/reference.txt"
 
-[[voice.variants]]
-id = "operator-a"
-label = "Operator A"
-reference_audio = "voice/reference_audio/radio-operator-a.wav"
-reference_text = "voice/reference_audio/reference.txt"
-default = true
+[canned.tool_started]
+directory = "canned/tool-started"
 
-[frontend.codec]
-config = "codec/persona.toml"
-portrait = "codec/portrait.png"
+[canned.tool_slow]
+directory = "canned/tool-slow"
+
+[canned.tool_completed]
+directory = "canned/tool-completed"
 ```
 
-`voice.reference_audio` and `voice.reference_text` define the default TTS reference used by the gateway. `voice.variants` documents additional shippable references for clients or installers; automatic variant selection is not currently implemented.
+`PROMPT.md` is appended to the Pi Brain prompt for that Voice Session. Its content and the manifest contribute to Brain identity so concurrent or warm sessions cannot cross Persona prompts. `voice.reference_audio` and `voice.reference_text` must be configured together. Canned directories contain signed PCM16 mono or stereo WAV files at 24 kHz; files are selected deterministically per session and streamed through the normal frontend audio path.
 
-Current Persona/reference lookup checks:
+Current Persona lookup checks:
 
-1. `<workspace>/.foxline/personas/<persona>`
-2. `<workspace>/personas/<persona>`
-3. `<workspace>/agents/<persona>`
-4. `<repo>/personas/<persona>`
-5. `<repo>/agents/<persona>`
+1. `<work-directory>/.foxline/personas/<persona>`
+2. `$XDG_DATA_HOME/foxline/personas/<persona>` or `~/.local/share/foxline/personas/<persona>`
+3. `<repo>/personas/<persona>` for bundled distributable Personas
+4. Legacy Work Directory/repository Agent sidecars during migration
 
-The first matching manifest or reference-audio directory wins. XDG-wide and `/etc` Persona installation are planned but are not implemented by the current resolver.
+The first matching package wins. Paths in `persona.toml` must stay confined to the package.
 
 The repo ships original demo Persona packages under `personas/` for users without game-disc assets. These packages may include generated Codec portraits and Koko/Kokoro-generated reference voices, but must not include copyrighted extracted runtime assets.
 

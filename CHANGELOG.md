@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added gateway-owned XDG Persona packages with fixed `PROMPT.md`, validated voice/canned-speech paths, Work Directory overrides, Persona-aware Brain identities, and legacy sidecar compatibility.
+- Added Persona-specific prerecorded tool-started, tool-slow, and tool-completed speech with deterministic per-session selection, interruption, and PCM streaming through the existing frontend audio path.
+- Isolated active Pi RPC Brains per Voice Session so concurrent clients selecting the same logical Agent cannot consume or interrupt each other's event streams.
 - Added the `foxline service` CLI for foreground supervision and macOS LaunchAgent `run`, `start`, `stop`, `restart`, `status`, `enable`, and `disable` lifecycle management.
 - Added workspace discovery and live Agent switching through the Voice Gateway, shared Client Core, and opt-in `builtin:switch-agent` Pi extension.
 - Added `just run overlayz` to install workspace dependencies and run Parakeet/Silero STT, the Voice Gateway, and the Overlayz Tauri development app with coordinated cleanup.

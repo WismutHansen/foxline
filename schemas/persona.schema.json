@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/byteowlz/foxline/main/schemas/persona.schema.json",
+  "title": "Foxline Persona manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "voice": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "reference_audio": { "$ref": "#/$defs/relativePath" },
+        "reference_text": { "$ref": "#/$defs/relativePath" }
+      },
+      "dependentRequired": {
+        "reference_audio": ["reference_text"],
+        "reference_text": ["reference_audio"]
+      }
+    },
+    "canned": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tool_started": { "$ref": "#/$defs/cannedGroup" },
+        "tool_slow": { "$ref": "#/$defs/cannedGroup" },
+        "tool_completed": { "$ref": "#/$defs/cannedGroup" }
+      }
+    }
+  },
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "anyOf": [
+          { "pattern": "^/" },
+          { "pattern": "(^|/)\\.\\.(/|$)" },
+          { "pattern": "^~" }
+        ]
+      }
+    },
+    "cannedGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["directory"],
+      "properties": {
+        "directory": { "$ref": "#/$defs/relativePath" }
+      }
+    }
+  }
+}
