@@ -1860,7 +1860,7 @@ fn hf_snapshot_path(model_id: &str) -> Option<PathBuf> {
 fn resolve_voice_reference(persona: &str, workspace: &Path, repo: &Path) -> Result<VoiceReference> {
     voice_reference_override()
         .or_else(|| {
-            PersonaRegistry::new(repo)
+            PersonaRegistry::new_with_data_root(repo, repo.join(".test-xdg-personas"))
                 .resolve(persona, workspace)
                 .ok()?
                 .voice

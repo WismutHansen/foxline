@@ -18,7 +18,7 @@ $XDG_DATA_HOME/foxline
 
 or `~/.local/share/foxline` when `XDG_DATA_HOME` is unset. The script maps:
 
-- `agents/<id>/SYSTEM.md` to `personas/<id>/PROMPT.md`;
+- `agents/<id>/PROMPT.md` to `personas/<id>/PROMPT.md`;
 - `assets/reference_audio` to the Persona `voice/` directory;
 - `assets/filler/tool_start_*` to `canned/tool-started/`;
 - `assets/filler/tool_slow_*` to `canned/tool-slow/`;

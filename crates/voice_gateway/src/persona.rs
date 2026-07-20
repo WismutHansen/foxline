@@ -52,10 +52,17 @@ struct CannedGroup {
 
 impl PersonaRegistry {
     pub fn new(repo_root: impl AsRef<Path>) -> Self {
+        Self::new_with_data_root(repo_root, default_data_root())
+    }
+
+    pub(crate) fn new_with_data_root(
+        repo_root: impl AsRef<Path>,
+        data_root: impl Into<PathBuf>,
+    ) -> Self {
         let repo_root = repo_root.as_ref();
         Self {
             bundled_root: repo_root.join("personas"),
-            data_root: default_data_root(),
+            data_root: data_root.into(),
             legacy_agents_root: Some(repo_root.join("agents")),
         }
     }

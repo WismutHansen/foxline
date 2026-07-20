@@ -1,7 +1,6 @@
 [pi]
 model = "LM-Studio/gemma-4-26b-a4b-it"
 thinking = "minimal"
-append_system_prompt_file = "SYSTEM.md"
 
 [adapters]
 stt = "parakeet-silero"

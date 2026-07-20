@@ -14,7 +14,7 @@ The Rust Voice Gateway owns `.foxline/` voice-session configuration. Pi-specific
     personas/
       radio-operator/
         persona.toml
-        SYSTEM.md
+        PROMPT.md
         voice/
           reference_audio/
         codec/

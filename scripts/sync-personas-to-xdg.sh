@@ -10,14 +10,14 @@ command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
 mkdir -p "$DEST/personas"
 
 for source in "$ROOT"/agents/*; do
-  [[ -d "$source" && -f "$source/SYSTEM.md" ]] || continue
+  [[ -d "$source" && -f "$source/PROMPT.md" ]] || continue
   id="${source##*/}"
   target="$DEST/personas/$id"
   display_name="$(jq -r --arg id "$id" '.characters[]? | select(.id == $id) | .displayName' "$MANIFEST" | head -1)"
   [[ -n "$display_name" && "$display_name" != "null" ]] || display_name="$id"
 
   mkdir -p "$target/voice" "$target/canned/tool-started" "$target/canned/tool-slow" "$target/canned/tool-completed"
-  cp "$source/SYSTEM.md" "$target/PROMPT.md"
+  cp "$source/PROMPT.md" "$target/PROMPT.md"
 
   reference="$(find "$source/assets/reference_audio" -maxdepth 1 -type f -iname '*.wav' ! -name '*.bak' 2>/dev/null | sort | head -1 || true)"
   has_voice=false
