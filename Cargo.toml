@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/protocol", "crates/voice_gateway", "apps/overlayz/src-tauri"]
+members = ["crates/protocol", "crates/voice_gateway", "crates/foxline_cli", "apps/overlayz/src-tauri"]
 resolver = "2"
 
 [workspace.package]

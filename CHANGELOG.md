@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added the `foxline service` CLI for foreground supervision and macOS LaunchAgent `run`, `start`, `stop`, `restart`, `status`, `enable`, and `disable` lifecycle management.
 - Added workspace discovery and live Agent switching through the Voice Gateway, shared Client Core, and opt-in `builtin:switch-agent` Pi extension.
 - Added `just run overlayz` to install workspace dependencies and run Parakeet/Silero STT, the Voice Gateway, and the Overlayz Tauri development app with coordinated cleanup.
 - Added `apps/overlayz` as the gateway-only Tauri overlay Frontend Skin copied from the standalone kitt repository, renamed the app to Overlayz, kept Orb and KITT LED as Visual Themes, removed legacy local STT/TTS/LLM frontend services, and wired the app to `@foxline/voice-client`.

@@ -58,6 +58,8 @@ scripts/install-assets.sh --force
 - Start STT/transcript services only: `scripts/start-services.sh`
 - Start Codec, STT, and the Rust gateway in tmux: `just demo-rust`
 - Start Overlayz, STT, and the Rust gateway: `just run overlayz`
+- Run the installed gateway/STT stack in the foreground: `foxline service run`
+- Manage macOS login startup: `foxline service enable --now`, `status`, `restart`, or `disable --now`
 
 Canonical entrypoints are the scripts in `scripts/`. The legacy TypeScript
 bridge is retired (ADR 0004); the Rust Voice Gateway is the sole gateway.
