@@ -3,6 +3,7 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Instant,
 };
 
 use anyhow::{Context, Result};
@@ -20,6 +21,7 @@ use foxline_protocol::{ClientControl, ServerEvent, WorkspaceSummary};
 use crate::{
     avatar::AvatarActionRouter,
     brain::{BrainIdentity, BrainPool, PiRpcBrain},
+    canned::CannedSpeech,
     config::GatewayConfig,
     control::{run_control_listener, ControlRegistry, SwitchAgentReply, SwitchAgentRequest},
     frame::{
@@ -328,6 +330,7 @@ async fn handle_connection(
                         tts = Some(tts_adapter);
                         live = LiveSessionState::new(session_id_text.clone());
                         live.persona = Some(persona);
+                        live.canned = CannedSpeech::from_persona(&resolved_persona)?;
                         process_pipeline_outputs(
                             &mut ws,
                             &mut pipeline,
@@ -603,6 +606,7 @@ struct SwitchTargetBundle {
     resolved: crate::loadout::ResolvedLoadout,
     agent: String,
     persona: String,
+    canned: CannedSpeech,
 }
 
 async fn resolve_switch_target(
@@ -673,6 +677,7 @@ async fn resolve_switch_target(
     let mut tts_adapter = build_tts_adapter(&resolved.loadout.adapters.tts, &resolved_persona)
         .map_err(|err| err.to_string())?;
     tts_adapter.prewarm().await.map_err(|err| err.to_string())?;
+    let canned = CannedSpeech::from_persona(&resolved_persona).map_err(|err| err.to_string())?;
     Ok(SwitchTargetBundle {
         identity,
         brain_handle,
@@ -682,6 +687,7 @@ async fn resolve_switch_target(
         resolved,
         agent,
         persona,
+        canned,
     })
 }
 
@@ -750,6 +756,7 @@ async fn handle_switch_agent_request(
             *tts = Some(bundle.tts_adapter);
             *live = LiveSessionState::new(session_id_text.to_string());
             live.persona = Some(bundle.persona.clone());
+            live.canned = bundle.canned;
             trace.event(
                 "agent_switched",
                 json!({
@@ -805,6 +812,8 @@ struct LiveSessionState {
     saw_brain_first_token: bool,
     sentence_buffer: SentenceBuffer,
     tts_segment_index: u64,
+    tts_active: bool,
+    canned: CannedSpeech,
 }
 
 impl LiveSessionState {
@@ -816,6 +825,8 @@ impl LiveSessionState {
             saw_brain_first_token: false,
             sentence_buffer: SentenceBuffer::default(),
             tts_segment_index: 0,
+            tts_active: false,
+            canned: CannedSpeech::default(),
         }
     }
 
@@ -824,6 +835,8 @@ impl LiveSessionState {
         self.saw_brain_first_token = false;
         self.sentence_buffer.clear();
         self.tts_segment_index = 0;
+        self.tts_active = false;
+        self.canned.cancel();
     }
 }
 
@@ -1165,6 +1178,19 @@ async fn drain_adapter_frames(
         )
         .await?;
     }
+    if live
+        .canned
+        .poll_tool_slow(Instant::now(), live.tts_active)?
+    {
+        trace.event("canned_speech_started", json!({ "event": "tool_slow" }))?;
+    }
+    if let Some(bytes) = live.canned.next_chunk() {
+        trace.event(
+            EVENT_FRONTEND_AUDIO_PLAY_SCHEDULED,
+            json!({ "bytes": bytes.len(), "source": "canned" }),
+        )?;
+        ws.send(Message::Binary(bytes.to_vec())).await?;
+    }
     Ok(())
 }
 
@@ -1265,6 +1291,15 @@ async fn handle_runtime_frame(
                 .await?;
             }
             Frame::Brain(BrainFrame::TextDelta { text }) => {
+                if live.canned.cancel() {
+                    send_event(
+                        ws,
+                        &ServerEvent::AudioReset {
+                            reason: Some("canned_speech_completed".to_string()),
+                        },
+                    )
+                    .await?;
+                }
                 if !live.assistant_started {
                     live.assistant_started = true;
                     send_event(
@@ -1351,9 +1386,49 @@ async fn handle_runtime_frame(
                 send_error(ws, "brain_error", &message).await?;
             }
             Frame::Brain(BrainFrame::ToolCall { name, arguments }) => {
+                if live.canned.tool_started(live.tts_active)? {
+                    trace.event("canned_speech_started", json!({ "event": "tool_started" }))?;
+                }
                 send_event(ws, &ServerEvent::FrontendToolCall { name, arguments }).await?;
             }
+            Frame::Brain(BrainFrame::ToolResult { .. }) => {
+                if live.canned.cancel() {
+                    send_event(
+                        ws,
+                        &ServerEvent::AudioReset {
+                            reason: Some("tool_completed".to_string()),
+                        },
+                    )
+                    .await?;
+                }
+                if live.canned.tool_completed(live.tts_active)? {
+                    trace.event(
+                        "canned_speech_started",
+                        json!({ "event": "tool_completed" }),
+                    )?;
+                }
+            }
+            Frame::Tts(TtsFrame::AudioStart { .. }) => {
+                if live.canned.cancel() {
+                    send_event(
+                        ws,
+                        &ServerEvent::AudioReset {
+                            reason: Some("tts_started".to_string()),
+                        },
+                    )
+                    .await?;
+                }
+                live.tts_active = true;
+            }
+            Frame::Tts(TtsFrame::AudioDone) => {
+                live.tts_active = false;
+            }
+            Frame::Tts(TtsFrame::Cancel) => {
+                live.tts_active = false;
+                live.canned.cancel();
+            }
             Frame::Tts(TtsFrame::Error { message }) => {
+                live.tts_active = false;
                 send_error(ws, "tts_error", &message).await?;
             }
             Frame::Metrics(metrics) if metrics.event == "pi_model_changed" => {

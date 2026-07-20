@@ -1,5 +1,6 @@
 pub mod avatar;
 pub mod brain;
+pub mod canned;
 pub mod config;
 pub mod control;
 pub mod frame;
