@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added `scripts/sync-personas-to-xdg.sh` so the distributable `agents/` metadata and any local ignored voice/canned assets can seed `~/.local/share/foxline`; visual assets, backups, and copyrighted runtime files remain excluded from the Foxline repository.
 - Added gateway-owned XDG Persona packages with fixed `PROMPT.md`, validated voice/canned-speech paths, Work Directory overrides, Persona-aware Brain identities, and legacy sidecar compatibility.
 - Added Persona-specific prerecorded tool-started, tool-slow, and tool-completed speech with deterministic per-session selection, interruption, and PCM streaming through the existing frontend audio path.
 - Isolated active Pi RPC Brains per Voice Session so concurrent clients selecting the same logical Agent cannot consume or interrupt each other's event streams.

@@ -65,7 +65,10 @@ Install the management CLI from a checkout:
 
 ```bash
 cargo install --path crates/foxline_cli
+scripts/sync-personas-to-xdg.sh
 ```
+
+The sync command treats `agents/` as the reference source, copies prompts plus any local ignored voice/canned audio into the user's XDG Persona store, and never stages those assets in this repository.
 
 Run in the foreground while testing, or enable the macOS LaunchAgent:
 
