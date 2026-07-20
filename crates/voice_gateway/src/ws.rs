@@ -27,6 +27,7 @@ use crate::{
         LifecycleFrame, SessionId, SttFrame, TtsFrame, TurnFrame, VadFrame,
     },
     loadout::LoadoutResolver,
+    persona::{PersonaRegistry, ResolvedPersona, VoiceReference},
     pipeline::{default_pipeline, LinearPipeline},
     stt::{stt_trace_event, ParakeetSileroConfig, ParakeetSileroSttAdapter, SttAdapter},
     tools::{FrontendToolNegotiation, FrontendToolRouter},
@@ -206,18 +207,33 @@ async fn handle_connection(
                                 continue;
                             }
                         };
+                        let persona_registry = PersonaRegistry::new(
+                            env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                        );
+                        let resolved_persona = match persona_registry.resolve(
+                            &persona,
+                            &resolved.workspace,
+                        ) {
+                            Ok(persona) => persona,
+                            Err(err) => {
+                                send_error(&mut ws, "persona_resolution_failed", &err.to_string())
+                                    .await?;
+                                continue;
+                            }
+                        };
                         let selected_model = model
                             .as_ref()
                             .map(|value| value.trim().to_string())
                             .filter(|value| !value.is_empty())
                             .or_else(|| resolved.loadout.pi.model.clone());
                         resolved.loadout.pi.model = selected_model.clone();
-                        let identity = BrainIdentity::new(
+                        let identity = BrainIdentity::new_with_persona(
                             agent.clone(),
                             std::path::PathBuf::from(&workspace),
                             resolved.name.clone(),
                             selected_model.clone(),
                             &frontend_capability_profile,
+                            resolved_persona.digest.clone(),
                         );
                         let tool_negotiation = FrontendToolNegotiation::negotiate(
                             &resolved.loadout.tools,
@@ -233,15 +249,13 @@ async fn handle_connection(
                             .cloned()
                             .collect::<Vec<_>>();
                         tool_router = Some(FrontendToolRouter::new(tool_negotiation.clone()));
-                        register_control_session(
-                            &control_registry,
-                            &mut control_session_name,
-                            identity.session_name(),
-                            &switch_tx,
-                        )
-                        .await;
                         let brain_handle = match brain_pool
-                            .get_or_prewarm(identity.clone(), &resolved, control_addr)
+                            .get_or_prewarm(
+                                identity.clone(),
+                                &resolved,
+                                control_addr,
+                                resolved_persona.prompt.as_deref(),
+                            )
                             .await
                         {
                             Ok(brain) => brain,
@@ -251,6 +265,14 @@ async fn handle_connection(
                                 continue;
                             }
                         };
+                        let active_identity = brain_handle.lock().await.identity().clone();
+                        register_control_session(
+                            &control_registry,
+                            &mut control_session_name,
+                            active_identity.session_name(),
+                            &switch_tx,
+                        )
+                        .await;
                         let launch = brain_handle.lock().await.launch().clone();
                         let stt_adapter = match build_stt_adapter(&resolved.loadout.adapters.stt) {
                             Ok(adapter) => adapter,
@@ -261,8 +283,7 @@ async fn handle_connection(
                         };
                         let mut tts_adapter = match build_tts_adapter(
                             &resolved.loadout.adapters.tts,
-                            &persona,
-                            &resolved.workspace,
+                            &resolved_persona,
                         ) {
                             Ok(adapter) => adapter,
                             Err(err) => {
@@ -619,12 +640,18 @@ async fn resolve_switch_target(
     let persona = persona_override
         .or_else(|| entry.persona.clone())
         .unwrap_or_else(|| agent.clone());
-    let identity = BrainIdentity::new(
+    let persona_registry =
+        PersonaRegistry::new(env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let resolved_persona = persona_registry
+        .resolve(&persona, &resolved.workspace)
+        .map_err(|err| err.to_string())?;
+    let identity = BrainIdentity::new_with_persona(
         agent.clone(),
         entry.path.clone(),
         resolved.name.clone(),
         resolved.loadout.pi.model.clone(),
         frontend_capability_profile,
+        resolved_persona.digest.clone(),
     );
     let tool_negotiation =
         FrontendToolNegotiation::negotiate(&resolved.loadout.tools, advertised_frontend_tools);
@@ -632,17 +659,20 @@ async fn resolve_switch_target(
         .ensure_startup_allowed()
         .map_err(|err| err.to_string())?;
     let brain_handle = brain_pool
-        .get_or_prewarm(identity.clone(), &resolved, control_addr)
+        .get_or_prewarm(
+            identity,
+            &resolved,
+            control_addr,
+            resolved_persona.prompt.as_deref(),
+        )
         .await
         .map_err(|err| err.to_string())?;
+    let identity = brain_handle.lock().await.identity().clone();
     let stt_adapter =
         build_stt_adapter(&resolved.loadout.adapters.stt).map_err(|err| err.to_string())?;
-    let mut tts_adapter = build_tts_adapter(&resolved.loadout.adapters.tts, &persona, &resolved.workspace)
+    let mut tts_adapter = build_tts_adapter(&resolved.loadout.adapters.tts, &resolved_persona)
         .map_err(|err| err.to_string())?;
-    tts_adapter
-        .prewarm()
-        .await
-        .map_err(|err| err.to_string())?;
+    tts_adapter.prewarm().await.map_err(|err| err.to_string())?;
     Ok(SwitchTargetBundle {
         identity,
         brain_handle,
@@ -875,7 +905,10 @@ fn is_likely_tts_boundary(text: &str, idx: usize, ch: char) -> bool {
     }
     if ch == '.' {
         // Ordered-list markers ("1. " at start of a line) are not sentence ends.
-        let before_token = text[..idx].split_whitespace().next_back().unwrap_or_default();
+        let before_token = text[..idx]
+            .split_whitespace()
+            .next_back()
+            .unwrap_or_default();
         if !before_token.is_empty() && before_token.chars().all(|c| c.is_ascii_digit()) {
             let lead = text[..idx].trim_end_matches(before_token);
             if lead.is_empty() || lead.ends_with('\n') {
@@ -1437,17 +1470,15 @@ fn build_stt_adapter(name: &str) -> Result<Box<dyn SttAdapter>> {
     Ok(Box::new(ParakeetSileroSttAdapter::new(config)))
 }
 
-fn build_tts_adapter(
-    name: &str,
-    persona: &str,
-    workspace: &std::path::Path,
-) -> Result<Box<dyn TtsAdapter>> {
+fn build_tts_adapter(name: &str, persona: &ResolvedPersona) -> Result<Box<dyn TtsAdapter>> {
     // FOXLINE_TTS_BACKEND overrides the loadout's adapter name so a backend
     // can be A/B'd without editing loadouts.
     let backend = env::var("FOXLINE_TTS_BACKEND").unwrap_or_else(|_| name.to_string());
     crate::tts::ensure_supported_tts_backend(&backend)?;
     let repo = repo_root();
-    let reference = resolve_voice_reference(persona, workspace, &repo)?;
+    let reference = voice_reference_override()
+        .or_else(|| persona.voice.clone())
+        .with_context(|| format!("Persona {:?} has no voice reference", persona.id))?;
     let sample_rate = env::var("CODEC_TTS_WORKER_SAMPLE_RATE")
         .ok()
         .and_then(|value| value.parse::<u32>().ok())
@@ -1563,7 +1594,7 @@ fn resolve_rust_tts_worker(repo: &Path) -> Result<PathBuf> {
         "rust-mlx TTS backend selected but no worker binary found: set \
          FOXLINE_TTS_RUST_WORKER, build ../spqx (cargo build --release \
          --no-default-features --features mlx --bin spqx-tts-worker), put \
-         spqx-tts-worker on PATH, or fix the prebuilt-release fetch (see cause)"
+         spqx-tts-worker on PATH, or fix the prebuilt-release fetch (see cause)",
     )
 }
 
@@ -1750,105 +1781,29 @@ fn hf_snapshot_path(model_id: &str) -> Option<PathBuf> {
     entries.pop()
 }
 
-struct VoiceReference {
-    wav: PathBuf,
-    txt: PathBuf,
-}
-
-#[derive(Debug, Deserialize)]
-struct PersonaManifest {
-    voice: Option<PersonaVoiceManifest>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PersonaVoiceManifest {
-    reference_audio: Option<String>,
-    reference_text: Option<String>,
-}
-
+#[cfg(test)]
 fn resolve_voice_reference(persona: &str, workspace: &Path, repo: &Path) -> Result<VoiceReference> {
-    if let (Ok(wav), Ok(txt)) = (
-        env::var("FOXLINE_TTS_REF_AUDIO").or_else(|_| env::var("CODEC_TTS_REF_AUDIO")),
-        env::var("FOXLINE_TTS_REF_TEXT_FILE").or_else(|_| env::var("CODEC_TTS_REF_TEXT_FILE")),
-    ) {
-        return Ok(VoiceReference {
-            wav: PathBuf::from(wav),
-            txt: PathBuf::from(txt),
-        });
-    }
-    let candidates = [
-        workspace.join(".foxline").join("personas").join(persona),
-        workspace.join("personas").join(persona),
-        workspace.join("agents").join(persona),
-        repo.join("personas").join(persona),
-        repo.join("agents").join(persona),
-    ];
-    for character_dir in candidates {
-        if let Some(reference) = resolve_manifest_voice_reference(&character_dir) {
-            return Ok(reference);
-        }
-        for dir in [
-            character_dir.join("voice/reference_audio"),
-            character_dir.join("assets/reference_audio"),
-            character_dir.join("assets"),
-        ] {
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
-                {
-                    let txt = path
-                        .with_extension("txt")
-                        .exists()
-                        .then(|| path.with_extension("txt"))
-                        .or_else(|| {
-                            let shared = dir.join("reference.txt");
-                            shared.exists().then_some(shared)
-                        })
-                        .or_else(|| {
-                            let sidecar = PathBuf::from(format!("{}.txt", path.display()));
-                            sidecar.exists().then_some(sidecar)
-                        });
-                    if let Some(txt) = txt {
-                        return Ok(VoiceReference { wav: path, txt });
-                    }
-                }
-            }
-        }
-    }
-    anyhow::bail!(
-        "No TTS reference wav/transcript found for persona {persona}; set FOXLINE_TTS_REF_AUDIO and FOXLINE_TTS_REF_TEXT_FILE"
-    )
+    voice_reference_override()
+        .or_else(|| {
+            PersonaRegistry::new(repo)
+                .resolve(persona, workspace)
+                .ok()?
+                .voice
+        })
+        .with_context(|| format!("Persona {persona:?} has no voice reference"))
 }
 
-fn resolve_manifest_voice_reference(persona_dir: &Path) -> Option<VoiceReference> {
-    let manifest_path = persona_dir.join("persona.toml");
-    let manifest = std::fs::read_to_string(&manifest_path).ok()?;
-    let manifest: PersonaManifest = toml::from_str(&manifest).ok()?;
-    let voice = manifest.voice?;
-    let wav = voice.reference_audio?;
-    let wav = persona_dir.join(wav);
-    if !wav.exists() {
-        return None;
-    }
-    let txt = voice
-        .reference_text
-        .map(|path| persona_dir.join(path))
-        .filter(|path| path.exists())
-        .or_else(|| {
-            let path = wav.with_extension("txt");
-            path.exists().then_some(path)
-        })
-        .or_else(|| {
-            let path = PathBuf::from(format!("{}.txt", wav.display()));
-            path.exists().then_some(path)
-        })?;
-    Some(VoiceReference { wav, txt })
+fn voice_reference_override() -> Option<VoiceReference> {
+    let wav = env::var("FOXLINE_TTS_REF_AUDIO")
+        .or_else(|_| env::var("CODEC_TTS_REF_AUDIO"))
+        .ok()?;
+    let txt = env::var("FOXLINE_TTS_REF_TEXT_FILE")
+        .or_else(|_| env::var("CODEC_TTS_REF_TEXT_FILE"))
+        .ok()?;
+    Some(VoiceReference {
+        wav: PathBuf::from(wav),
+        txt: PathBuf::from(txt),
+    })
 }
 
 fn repo_root() -> PathBuf {
@@ -2035,7 +1990,10 @@ mod tests {
         assert!(chunks.len() > 1);
         for chunk in &chunks {
             assert!(
-                text.split_whitespace().collect::<Vec<_>>().join(" ").contains(chunk),
+                text.split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .contains(chunk),
                 "chunk split mid-word: {chunk:?}"
             );
         }

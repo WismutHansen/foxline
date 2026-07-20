@@ -4,6 +4,7 @@ pub mod config;
 pub mod control;
 pub mod frame;
 pub mod loadout;
+pub mod persona;
 pub mod pipeline;
 pub mod stt;
 pub mod think_block_filter;

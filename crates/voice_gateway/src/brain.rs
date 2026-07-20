@@ -1,10 +1,12 @@
 use std::{
-    collections::HashMap,
     fs,
     net::SocketAddr,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use anyhow::{Context, Result};
@@ -39,6 +41,8 @@ pub struct BrainIdentity {
     pub loadout: String,
     pub model: Option<String>,
     pub frontend_capability_hash: String,
+    pub persona_digest: String,
+    instance_id: u64,
 }
 
 impl BrainIdentity {
@@ -49,21 +53,53 @@ impl BrainIdentity {
         model: Option<String>,
         frontend_capability_profile: &Value,
     ) -> Self {
+        Self::new_with_persona(
+            agent,
+            workspace,
+            loadout,
+            model,
+            frontend_capability_profile,
+            "",
+        )
+    }
+
+    pub fn new_with_persona(
+        agent: impl Into<String>,
+        workspace: impl Into<PathBuf>,
+        loadout: impl Into<String>,
+        model: Option<String>,
+        frontend_capability_profile: &Value,
+        persona_digest: impl Into<String>,
+    ) -> Self {
         Self {
             agent: agent.into(),
             workspace: workspace.into(),
             loadout: loadout.into(),
             model,
             frontend_capability_hash: stable_value_hash(frontend_capability_profile),
+            persona_digest: persona_digest.into(),
+            instance_id: 0,
         }
     }
 
+    fn with_instance(mut self, instance_id: u64) -> Self {
+        self.instance_id = instance_id;
+        self
+    }
+
     pub fn session_name(&self) -> String {
+        let persona_hash = if self.persona_digest.is_empty() {
+            "no-persona"
+        } else {
+            &self.persona_digest[..self.persona_digest.len().min(12)]
+        };
         format!(
-            "foxline-voice-{}-{}-{}",
+            "foxline-voice-{}-{}-{}-{}-{}",
             sanitize_identity_component(&self.agent),
             sanitize_identity_component(&self.loadout),
-            &self.frontend_capability_hash[..12]
+            &self.frontend_capability_hash[..12],
+            persona_hash,
+            self.instance_id,
         )
     }
 }
@@ -82,6 +118,7 @@ impl PiLaunch {
         identity: &BrainIdentity,
         loadout: &ResolvedLoadout,
         control_addr: SocketAddr,
+        persona_prompt: Option<&str>,
     ) -> Self {
         let mut args = vec![
             "--mode".to_string(),
@@ -144,6 +181,10 @@ impl PiLaunch {
         }
         args.push("--append-system-prompt".to_string());
         args.push(VOICE_SESSION_APPEND_SYSTEM_PROMPT.to_string());
+        if let Some(prompt) = persona_prompt.filter(|prompt| !prompt.trim().is_empty()) {
+            args.push("--append-system-prompt".to_string());
+            args.push(prompt.to_string());
+        }
         for extension in &loadout.extension_paths {
             args.push("--extension".to_string());
             args.push(extension.display().to_string());
@@ -232,29 +273,41 @@ fn spawn_model_warmup(launch: PiLaunch) {
 
 pub struct BrainPool {
     config: BrainConfig,
-    brains: Mutex<HashMap<BrainIdentity, Arc<Mutex<PiRpcBrain>>>>,
+    brains: Mutex<Vec<Arc<Mutex<PiRpcBrain>>>>,
+    next_instance_id: AtomicU64,
 }
 
 impl BrainPool {
     pub fn new(config: BrainConfig) -> Self {
         Self {
             config,
-            brains: Mutex::new(HashMap::new()),
+            brains: Mutex::new(Vec::new()),
+            next_instance_id: AtomicU64::new(1),
         }
     }
 
+    /// Acquire an exclusively owned Brain for one active Voice Session.
+    ///
+    /// Active sessions never share a Pi stdin or event receiver, even when
+    /// their logical identities match. Idle reuse can be added later through
+    /// an explicit lease/release state machine; returning a singleton here is
+    /// unsafe because WebSocket tasks race to drain the same receiver.
     pub async fn get_or_prewarm(
         &self,
         identity: BrainIdentity,
         loadout: &ResolvedLoadout,
         control_addr: SocketAddr,
+        persona_prompt: Option<&str>,
     ) -> Result<Arc<Mutex<PiRpcBrain>>> {
-        let mut brains = self.brains.lock().await;
-        if let Some(brain) = brains.get(&identity) {
-            return Ok(Arc::clone(brain));
-        }
-
-        let launch = PiLaunch::build(&self.config, &identity, loadout, control_addr);
+        let identity =
+            identity.with_instance(self.next_instance_id.fetch_add(1, Ordering::Relaxed));
+        let launch = PiLaunch::build(
+            &self.config,
+            &identity,
+            loadout,
+            control_addr,
+            persona_prompt,
+        );
         // Prewarm only spawns the Pi process; the provider still loads the
         // model lazily on the first prompt (measured: 10s first-turn on a
         // cold LM Studio 26B). The ephemeral warmup fixes that without
@@ -272,14 +325,14 @@ impl BrainPool {
             }
         }
         let brain = Arc::new(Mutex::new(brain));
-        brains.insert(identity, Arc::clone(&brain));
+        self.brains.lock().await.push(Arc::clone(&brain));
         Ok(brain)
     }
 
     pub async fn shutdown_idle(&self) -> Result<usize> {
         let brains = self.brains.lock().await;
         let mut stopped = 0;
-        for brain in brains.values() {
+        for brain in brains.iter() {
             let mut brain = brain.lock().await;
             if brain.is_idle_expired() {
                 brain.shutdown().await?;
@@ -291,7 +344,7 @@ impl BrainPool {
 
     pub async fn shutdown_all(&self) -> Result<()> {
         let brains = self.brains.lock().await;
-        for brain in brains.values() {
+        for brain in brains.iter() {
             brain.lock().await.shutdown().await?;
         }
         Ok(())
@@ -701,7 +754,7 @@ fn value_to_string(value: Option<Value>, fallback: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, net::SocketAddr, sync::Arc};
 
     use serde_json::json;
     use tempfile::tempdir;
@@ -713,7 +766,7 @@ mod tests {
     };
 
     use super::{
-        rpc_line_to_frames, BrainIdentity, PiLaunch, RpcEvent, RpcFrameMapper,
+        rpc_line_to_frames, BrainIdentity, BrainPool, PiLaunch, RpcEvent, RpcFrameMapper,
         VOICE_SESSION_APPEND_SYSTEM_PROMPT,
     };
 
@@ -850,7 +903,13 @@ mod tests {
         );
 
         let control_addr: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
-        let launch = PiLaunch::build(&BrainConfig::default(), &identity, &resolved, control_addr);
+        let launch = PiLaunch::build(
+            &BrainConfig::default(),
+            &identity,
+            &resolved,
+            control_addr,
+            Some("Speak as KITT."),
+        );
 
         assert_eq!(launch.command, "pi");
         assert_eq!(launch.cwd, dir.path());
@@ -884,6 +943,10 @@ mod tests {
         assert!(launch
             .args
             .windows(2)
+            .any(|pair| pair == ["--append-system-prompt", "Speak as KITT."]));
+        assert!(launch
+            .args
+            .windows(2)
             .any(|pair| pair == ["--tools", "read,write"]));
         assert!(launch.args.contains(&"--extension".to_string()));
         assert!(launch
@@ -893,10 +956,9 @@ mod tests {
         assert!(launch
             .envs
             .contains(&("FOXLINE_CONTROL_ADDR".to_string(), control_addr.to_string())));
-        assert!(launch
-            .envs
-            .iter()
-            .any(|(key, value)| key == "FOXLINE_CONTROL_TOKEN" && value == &identity.session_name()));
+        assert!(launch.envs.iter().any(
+            |(key, value)| key == "FOXLINE_CONTROL_TOKEN" && value == &identity.session_name()
+        ));
     }
 
     #[test]
@@ -936,6 +998,53 @@ mod tests {
         assert!(a
             .session_name()
             .starts_with("foxline-voice-campbell-default-"));
+
+        let persona_a = BrainIdentity::new_with_persona(
+            "campbell",
+            "/tmp/a",
+            "default",
+            None,
+            &json!({}),
+            "digest-a",
+        );
+        let persona_b = BrainIdentity::new_with_persona(
+            "campbell",
+            "/tmp/a",
+            "default",
+            None,
+            &json!({}),
+            "digest-b",
+        );
+        assert_ne!(persona_a, persona_b);
+    }
+
+    #[tokio::test]
+    async fn same_identity_sessions_receive_distinct_brains_and_event_receivers() {
+        let dir = tempdir().unwrap();
+        let resolved = resolved_loadout(dir.path().to_path_buf());
+        let pool = BrainPool::new(BrainConfig::default());
+        let identity = BrainIdentity::new_with_persona(
+            "campbell",
+            dir.path(),
+            "default",
+            None,
+            &json!({ "tools": [] }),
+            "persona-digest",
+        );
+        let control_addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let first = pool
+            .get_or_prewarm(identity.clone(), &resolved, control_addr, Some("first"))
+            .await
+            .unwrap();
+        let second = pool
+            .get_or_prewarm(identity, &resolved, control_addr, Some("second"))
+            .await
+            .unwrap();
+
+        assert!(!Arc::ptr_eq(&first, &second));
+        let first_name = first.lock().await.identity().session_name();
+        let second_name = second.lock().await.identity().session_name();
+        assert_ne!(first_name, second_name);
     }
 
     #[test]
