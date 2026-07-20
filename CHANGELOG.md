@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added workspace discovery and live Agent switching through the Voice Gateway, shared Client Core, and opt-in `builtin:switch-agent` Pi extension.
+- Added `just run overlayz` to install workspace dependencies and run Parakeet/Silero STT, the Voice Gateway, and the Overlayz Tauri development app with coordinated cleanup.
 - Added `apps/overlayz` as the gateway-only Tauri overlay Frontend Skin copied from the standalone kitt repository, renamed the app to Overlayz, kept Orb and KITT LED as Visual Themes, removed legacy local STT/TTS/LLM frontend services, and wired the app to `@foxline/voice-client`.
 - Moved the Codec web frontend from the repository root into `apps/codec`, added `@foxline/codec`, and updated root scripts so `bun run dev/build/typecheck/preview` continue to target Codec through the workspace layout required by ADR 0005.
 - Extracted `@foxline/voice-client` (`packages/voice-client`) as the browser-clean TypeScript Client Core for WebSocket lifecycle, gateway session control, binary PCM receive/send, reconnect, and streaming audio playback. Codec now uses a thin adapter over the shared Client Core while keeping its UI event surface stable.

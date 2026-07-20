@@ -11,9 +11,18 @@ export type VoiceCharacterInfo = {
   enabled?: boolean;
 };
 
+export type VoiceWorkspaceSummary = {
+  id: string;
+  path: string;
+  agent?: string | null;
+  persona?: string | null;
+  loadout?: string | null;
+};
+
 export type VoiceClientEvent =
   | { type: 'ready'; character: string; characters?: VoiceCharacterInfo[]; model?: string | null }
   | { type: 'character_switched'; character: string; characters?: VoiceCharacterInfo[] }
+  | { type: 'workspace_defaults'; workspaces: VoiceWorkspaceSummary[] }
   | { type: 'phase'; phase: VoicePhase }
   | { type: 'assistant_delta'; delta: string; turnId: string }
   | { type: 'user_transcript'; text: string; final: boolean; confidence?: number | null }
@@ -36,6 +45,7 @@ export type VoiceGatewayClientOptions = {
   loadout?: string;
   persona?: string;
   model?: string;
+  token?: string;
   characters?: VoiceCharacterInfo[];
   agentWorkspaceIds?: Set<string> | string[];
   debugTraces?: boolean;
@@ -306,10 +316,13 @@ export class VoiceGatewayClient {
   private agent: string;
   private readonly url: string;
   private readonly clientId: string;
-  private readonly workspaceOverride: string;
-  private readonly loadout: string;
+  private workspaceOverride: string;
+  private loadout: string;
   private persona: string;
   private model: string;
+  private readonly token: string;
+  private awaitingDefaults = false;
+  private defaultsTimeoutId?: number;
   private readonly characters: VoiceCharacterInfo[];
   private readonly agentWorkspaceIds: Set<string>;
   private readonly debugTraces: boolean;
@@ -330,6 +343,7 @@ export class VoiceGatewayClient {
     this.loadout = options.loadout || 'default';
     this.persona = options.persona || this.agent;
     this.model = options.model || '';
+    this.token = options.token || '';
     this.characters = options.characters || [];
     this.agentWorkspaceIds = new Set(options.agentWorkspaceIds || []);
     this.debugTraces = options.debugTraces ?? false;
@@ -361,6 +375,7 @@ export class VoiceGatewayClient {
         type: 'hello',
         client: this.clientId,
         debug_traces: this.debugTraces,
+        token: this.token || null,
         capabilities: {
           protocol_version: this.protocolVersion,
           audio: { input_pcm: true, output_pcm: true, sample_rates_hz: this.inputSampleRatesHz },
@@ -368,14 +383,19 @@ export class VoiceGatewayClient {
           avatar_actions: this.avatarActions,
         },
       });
-      this.sendControl({
-        type: 'start_session',
-        agent: this.agent,
-        persona: this.persona,
-        workspace: this.workspace(),
-        loadout: this.loadout,
-        model: this.model || null,
-      });
+      // The gateway replies with a `defaults` event right after hello; when
+      // the caller didn't pin a workspace, wait briefly to adopt the
+      // gateway-owned default instead of racing start_session ahead of it.
+      if (!this.workspaceOverride) {
+        this.awaitingDefaults = true;
+        this.defaultsTimeoutId = window.setTimeout(() => {
+          if (!this.awaitingDefaults) return;
+          this.awaitingDefaults = false;
+          this.beginSession();
+        }, 500);
+      } else {
+        this.beginSession();
+      }
     };
     ws.onmessage = async (e) => this.handleMessage(e);
     ws.onerror = () => this.emit({ type: 'error', message: `Could not connect to Rust Voice Gateway at ${this.url}` });
@@ -395,6 +415,8 @@ export class VoiceGatewayClient {
   disconnect() {
     window.clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
+    window.clearTimeout(this.defaultsTimeoutId);
+    this.awaitingDefaults = false;
     const ws = this.ws;
     this.ws = undefined;
     ws?.close();
@@ -491,6 +513,16 @@ export class VoiceGatewayClient {
         call_id: `${event.name}-${Date.now()}`,
         result: { ok: false, error: this.unimplementedToolMessage },
       });
+    } else if (event.type === 'defaults') {
+      if (this.awaitingDefaults) {
+        this.awaitingDefaults = false;
+        window.clearTimeout(this.defaultsTimeoutId);
+        if (!this.workspaceOverride && event.workspace) this.workspaceOverride = event.workspace;
+        if (event.persona && this.persona === this.agent) this.persona = event.persona;
+        if (event.loadout && this.loadout === 'default') this.loadout = event.loadout;
+        this.beginSession();
+      }
+      this.emit({ type: 'workspace_defaults', workspaces: event.workspaces });
     }
   }
 
@@ -504,6 +536,17 @@ export class VoiceGatewayClient {
 
   private workspace() {
     return this.workspaceOverride || `agents/${this.agent}`;
+  }
+
+  private beginSession() {
+    this.sendControl({
+      type: 'start_session',
+      agent: this.agent,
+      persona: this.persona,
+      workspace: this.workspace(),
+      loadout: this.loadout,
+      model: this.model || null,
+    });
   }
 
   private restartSession() {

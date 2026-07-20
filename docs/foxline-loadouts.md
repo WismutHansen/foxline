@@ -126,4 +126,20 @@ This lets a general UI keep one Agent/Brain active while changing voice or prese
 - A relative path such as `extensions/project-tools` resolves under `.foxline/`.
 - Absolute extension paths are rejected.
 
-The gateway will pass resolved voice-only extensions to Pi with explicit `--extension` flags when the Pi RPC Brain adapter is implemented.
+The gateway passes resolved extensions to Pi with explicit `--extension` flags.
+
+### `builtin:switch-agent`
+
+Bundled but **not** loaded by default (unlike `pi-config/extensions/foxline-tools`,
+which every agent gets via `scripts/sync-pi-extensions.sh`). A workspace opts in
+by listing it explicitly:
+
+```toml
+# .foxline/loadout.toml
+extensions = ["builtin:switch-agent"]
+```
+
+This registers a `switch_agent` tool that lets Pi switch the live voice session
+to a different workspace/agent (and optionally persona) from `[workspaces.registry]`
+without ending the session. See
+`crates/voice_gateway/extensions/switch-agent/README.md` for the wire protocol.

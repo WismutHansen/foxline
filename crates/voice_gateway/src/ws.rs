@@ -1,5 +1,6 @@
 use std::{
     env,
+    net::SocketAddr,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -9,17 +10,18 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::{self, Duration};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
-use foxline_protocol::{ClientControl, ServerEvent};
+use foxline_protocol::{ClientControl, ServerEvent, WorkspaceSummary};
 
 use crate::{
     avatar::AvatarActionRouter,
     brain::{BrainIdentity, BrainPool, PiRpcBrain},
     config::GatewayConfig,
+    control::{run_control_listener, ControlRegistry, SwitchAgentReply, SwitchAgentRequest},
     frame::{
         AudioFrame, BrainFrame, Frame, FrameEnvelope, FrontendToolFrame, InterruptReason,
         LifecycleFrame, SessionId, SttFrame, TtsFrame, TurnFrame, VadFrame,
@@ -41,14 +43,20 @@ pub async fn serve(config: GatewayConfig) -> Result<()> {
         .with_context(|| format!("bind gateway websocket {}", config.bind))?;
     info!(bind = %config.bind, "voice gateway listening");
     let brain_pool = Arc::new(BrainPool::new(config.brain.clone()));
+    let control_registry = ControlRegistry::new();
+    let control_addr = run_control_listener(control_registry.clone()).await?;
+    info!(addr = %control_addr, "switch_agent control listener bound");
     let shared = Arc::new(config);
 
     loop {
         let (stream, addr) = listener.accept().await.context("accept websocket tcp")?;
         let config = Arc::clone(&shared);
         let brain_pool = Arc::clone(&brain_pool);
+        let control_registry = control_registry.clone();
         tokio::spawn(async move {
-            if let Err(err) = handle_connection(stream, config, brain_pool).await {
+            if let Err(err) =
+                handle_connection(stream, config, brain_pool, control_addr, control_registry).await
+            {
                 error!(%addr, error = %err, "gateway connection failed");
             }
         });
@@ -59,6 +67,8 @@ async fn handle_connection(
     stream: TcpStream,
     config: Arc<GatewayConfig>,
     brain_pool: Arc<BrainPool>,
+    control_addr: SocketAddr,
+    control_registry: ControlRegistry,
 ) -> Result<()> {
     let mut ws = accept_async(stream).await.context("accept websocket")?;
     let session_id = SessionId::new();
@@ -77,6 +87,8 @@ async fn handle_connection(
     let mut session_started = false;
     let mut pipeline = default_pipeline(config.turn.clone());
     let mut adapter_tick = time::interval(Duration::from_millis(15));
+    let (switch_tx, mut switch_rx) = mpsc::unbounded_channel::<SwitchAgentRequest>();
+    let mut control_session_name: Option<String> = None;
 
     send_event(
         &mut ws,
@@ -103,6 +115,31 @@ async fn handle_connection(
                 ).await?;
                 continue;
             }
+            Some(request) = switch_rx.recv() => {
+                handle_switch_agent_request(
+                    request,
+                    &config,
+                    &brain_pool,
+                    control_addr,
+                    &control_registry,
+                    &mut control_session_name,
+                    &switch_tx,
+                    &advertised_frontend_tools,
+                    &frontend_capability_profile,
+                    &mut ws,
+                    &mut pipeline,
+                    &trace,
+                    &avatar_router,
+                    &session_id,
+                    &session_id_text,
+                    &mut brain,
+                    &mut stt,
+                    &mut tts,
+                    &mut tool_router,
+                    &mut live,
+                ).await?;
+                continue;
+            }
             message = ws.next() => {
                 let Some(message) = message else { break; };
                 match message.context("read websocket message")? {
@@ -115,7 +152,14 @@ async fn handle_connection(
                     }
                 };
                 match event {
-                    ClientControl::Hello { capabilities, .. } => {
+                    ClientControl::Hello { capabilities, token, .. } => {
+                        if let Some(expected) = config.auth.token.as_deref().filter(|t| !t.is_empty()) {
+                            if token.as_deref() != Some(expected) {
+                                send_error(&mut ws, "unauthorized", "invalid or missing token")
+                                    .await?;
+                                break;
+                            }
+                        }
                         capabilities_declared = true;
                         advertised_frontend_tools = capabilities.tools.clone();
                         if let Some(audio) = &capabilities.audio {
@@ -133,6 +177,7 @@ async fn handle_connection(
                             }),
                         );
                         let _ = pipeline.process(frame).await?;
+                        send_event(&mut ws, &workspace_defaults_event(&config)).await?;
                     }
                     ClientControl::StartSession {
                         agent,
@@ -188,15 +233,24 @@ async fn handle_connection(
                             .cloned()
                             .collect::<Vec<_>>();
                         tool_router = Some(FrontendToolRouter::new(tool_negotiation.clone()));
-                        let brain_handle =
-                            match brain_pool.get_or_prewarm(identity.clone(), &resolved).await {
-                                Ok(brain) => brain,
-                                Err(err) => {
-                                    send_error(&mut ws, "brain_prewarm_failed", &err.to_string())
-                                        .await?;
-                                    continue;
-                                }
-                            };
+                        register_control_session(
+                            &control_registry,
+                            &mut control_session_name,
+                            identity.session_name(),
+                            &switch_tx,
+                        )
+                        .await;
+                        let brain_handle = match brain_pool
+                            .get_or_prewarm(identity.clone(), &resolved, control_addr)
+                            .await
+                        {
+                            Ok(brain) => brain,
+                            Err(err) => {
+                                send_error(&mut ws, "brain_prewarm_failed", &err.to_string())
+                                    .await?;
+                                continue;
+                            }
+                        };
                         let launch = brain_handle.lock().await.launch().clone();
                         let stt_adapter = match build_stt_adapter(&resolved.loadout.adapters.stt) {
                             Ok(adapter) => adapter,
@@ -487,7 +541,230 @@ async fn handle_connection(
         }
     }
 
+    if let Some(name) = control_session_name.take() {
+        control_registry.unregister(&name).await;
+    }
     info!(session_id = %session_id_text, "gateway session ended");
+    Ok(())
+}
+
+/// (Re)registers this connection's `switch_agent` control channel under the
+/// current Brain identity's session name, unregistering the previous name if
+/// it changed (e.g. after a switch). No-op-safe to call on every session
+/// (re)start.
+async fn register_control_session(
+    control_registry: &ControlRegistry,
+    control_session_name: &mut Option<String>,
+    new_session_name: String,
+    switch_tx: &mpsc::UnboundedSender<SwitchAgentRequest>,
+) {
+    if let Some(old_name) = control_session_name.take() {
+        if old_name != new_session_name {
+            control_registry.unregister(&old_name).await;
+        }
+    }
+    control_registry
+        .register(new_session_name.clone(), switch_tx.clone())
+        .await;
+    *control_session_name = Some(new_session_name);
+}
+
+/// Everything a `switch_agent` control request needs resolved before it can
+/// be swapped into a live connection: mirrors what `StartSession` resolves,
+/// but sourced from `config.workspaces.registry` (a safe, named target)
+/// rather than free-form client input.
+struct SwitchTargetBundle {
+    identity: BrainIdentity,
+    brain_handle: Arc<Mutex<PiRpcBrain>>,
+    stt_adapter: Box<dyn SttAdapter>,
+    tts_adapter: Box<dyn TtsAdapter>,
+    tool_negotiation: FrontendToolNegotiation,
+    resolved: crate::loadout::ResolvedLoadout,
+    agent: String,
+    persona: String,
+}
+
+async fn resolve_switch_target(
+    config: &GatewayConfig,
+    brain_pool: &BrainPool,
+    control_addr: SocketAddr,
+    advertised_frontend_tools: &[String],
+    frontend_capability_profile: &serde_json::Value,
+    target_id: &str,
+    persona_override: Option<String>,
+) -> std::result::Result<SwitchTargetBundle, String> {
+    let entry = config
+        .workspaces
+        .registry
+        .get(target_id)
+        .cloned()
+        .ok_or_else(|| {
+            let known = config
+                .workspaces
+                .registry
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("unknown workspace id \"{target_id}\" (known: {known})")
+        })?;
+    let agent = entry
+        .agent
+        .clone()
+        .ok_or_else(|| format!("workspace \"{target_id}\" has no agent configured"))?;
+    let resolver = LoadoutResolver::new(config.loadouts.clone());
+    let resolved = resolver
+        .resolve(&entry.path, entry.loadout.as_deref())
+        .map_err(|err| err.to_string())?;
+    let persona = persona_override
+        .or_else(|| entry.persona.clone())
+        .unwrap_or_else(|| agent.clone());
+    let identity = BrainIdentity::new(
+        agent.clone(),
+        entry.path.clone(),
+        resolved.name.clone(),
+        resolved.loadout.pi.model.clone(),
+        frontend_capability_profile,
+    );
+    let tool_negotiation =
+        FrontendToolNegotiation::negotiate(&resolved.loadout.tools, advertised_frontend_tools);
+    tool_negotiation
+        .ensure_startup_allowed()
+        .map_err(|err| err.to_string())?;
+    let brain_handle = brain_pool
+        .get_or_prewarm(identity.clone(), &resolved, control_addr)
+        .await
+        .map_err(|err| err.to_string())?;
+    let stt_adapter =
+        build_stt_adapter(&resolved.loadout.adapters.stt).map_err(|err| err.to_string())?;
+    let mut tts_adapter = build_tts_adapter(&resolved.loadout.adapters.tts, &persona, &resolved.workspace)
+        .map_err(|err| err.to_string())?;
+    tts_adapter
+        .prewarm()
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(SwitchTargetBundle {
+        identity,
+        brain_handle,
+        stt_adapter,
+        tts_adapter,
+        tool_negotiation,
+        resolved,
+        agent,
+        persona,
+    })
+}
+
+/// Handles one `switch_agent` control request delivered to this connection's
+/// `switch_rx` channel: resolves the target workspace, swaps the live
+/// brain/stt/tts in place (without ending the WS session or resetting
+/// `session_id`), notifies the frontend, and replies to the waiting extension
+/// call over the control TCP connection.
+#[allow(clippy::too_many_arguments)]
+async fn handle_switch_agent_request(
+    request: SwitchAgentRequest,
+    config: &GatewayConfig,
+    brain_pool: &BrainPool,
+    control_addr: SocketAddr,
+    control_registry: &ControlRegistry,
+    control_session_name: &mut Option<String>,
+    switch_tx: &mpsc::UnboundedSender<SwitchAgentRequest>,
+    advertised_frontend_tools: &[String],
+    frontend_capability_profile: &serde_json::Value,
+    ws: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+    pipeline: &mut LinearPipeline,
+    trace: &TraceWriter,
+    avatar_router: &AvatarActionRouter,
+    session_id: &SessionId,
+    session_id_text: &str,
+    brain: &mut Option<Arc<Mutex<PiRpcBrain>>>,
+    stt: &mut Option<Box<dyn SttAdapter>>,
+    tts: &mut Option<Box<dyn TtsAdapter>>,
+    tool_router: &mut Option<FrontendToolRouter>,
+    live: &mut LiveSessionState,
+) -> Result<()> {
+    let SwitchAgentRequest {
+        workspace: target_id,
+        persona: persona_override,
+        reply,
+    } = request;
+
+    match resolve_switch_target(
+        config,
+        brain_pool,
+        control_addr,
+        advertised_frontend_tools,
+        frontend_capability_profile,
+        &target_id,
+        persona_override,
+    )
+    .await
+    {
+        Ok(bundle) => {
+            if let Some(stt) = stt.as_deref_mut() {
+                let _ = stt.shutdown().await;
+            }
+            if let Some(tts) = tts.as_deref_mut() {
+                let _ = tts.shutdown().await;
+            }
+            register_control_session(
+                control_registry,
+                control_session_name,
+                bundle.identity.session_name(),
+                switch_tx,
+            )
+            .await;
+            tool_router.replace(FrontendToolRouter::new(bundle.tool_negotiation.clone()));
+            *brain = Some(bundle.brain_handle);
+            *stt = Some(bundle.stt_adapter);
+            *tts = Some(bundle.tts_adapter);
+            *live = LiveSessionState::new(session_id_text.to_string());
+            live.persona = Some(bundle.persona.clone());
+            trace.event(
+                "agent_switched",
+                json!({
+                    "agent": bundle.agent,
+                    "persona": bundle.persona,
+                    "workspace": target_id,
+                    "loadout": bundle.resolved.name,
+                }),
+            )?;
+            process_pipeline_outputs(
+                ws,
+                pipeline,
+                trace,
+                avatar_router,
+                bundle.tool_negotiation.negotiated_frame(session_id.clone()),
+            )
+            .await?;
+            send_event(
+                ws,
+                &ServerEvent::AgentSwitched {
+                    workspace: target_id.clone(),
+                    agent: bundle.agent.clone(),
+                    persona: bundle.persona.clone(),
+                    loadout: bundle.resolved.name.clone(),
+                },
+            )
+            .await?;
+            let _ = reply.send(SwitchAgentReply::ok(
+                target_id,
+                bundle.agent,
+                bundle.persona,
+                bundle.resolved.name,
+            ));
+        }
+        Err(error) => {
+            send_event(
+                ws,
+                &ServerEvent::AgentSwitchFailed {
+                    error: error.clone(),
+                },
+            )
+            .await?;
+            let _ = reply.send(SwitchAgentReply::err(error));
+        }
+    }
     Ok(())
 }
 
@@ -552,7 +829,11 @@ impl SentenceBuffer {
     fn find_cut(&self) -> Option<usize> {
         const MIN_CHARS: usize = 28;
         const MAX_CHARS: usize = 90;
+        let mut last_whitespace_cut = None;
         for (idx, ch) in self.text.char_indices() {
+            if ch.is_whitespace() && idx <= MAX_CHARS {
+                last_whitespace_cut = Some(idx + ch.len_utf8());
+            }
             if !is_likely_tts_boundary(&self.text, idx, ch) {
                 continue;
             }
@@ -561,7 +842,17 @@ impl SentenceBuffer {
                 return Some(cut);
             }
         }
-        (self.text.len() > MAX_CHARS).then_some(MAX_CHARS)
+        if self.text.len() <= MAX_CHARS {
+            return None;
+        }
+        // Overflow without a sentence boundary: cut on the last word break
+        // inside the window so we never hand the TTS a mid-word fragment.
+        last_whitespace_cut.or_else(|| {
+            self.text[MAX_CHARS..]
+                .char_indices()
+                .find(|(_, c)| c.is_whitespace())
+                .map(|(i, c)| MAX_CHARS + i + c.len_utf8())
+        })
     }
 }
 
@@ -574,10 +865,23 @@ fn is_likely_tts_boundary(text: &str, idx: usize, ch: char) -> bool {
         .chars()
         .next()
         .unwrap_or_default();
+    // Punctuation glued to a following token (URLs, filenames like ws.rs,
+    // versions like v1.beta) is not a sentence end.
+    if next != char::default() && !next.is_whitespace() {
+        return false;
+    }
     if ch == '.' && prev.is_ascii_digit() && next.is_ascii_digit() {
         return false;
     }
     if ch == '.' {
+        // Ordered-list markers ("1. " at start of a line) are not sentence ends.
+        let before_token = text[..idx].split_whitespace().next_back().unwrap_or_default();
+        if !before_token.is_empty() && before_token.chars().all(|c| c.is_ascii_digit()) {
+            let lead = text[..idx].trim_end_matches(before_token);
+            if lead.is_empty() || lead.ends_with('\n') {
+                return false;
+            }
+        }
         let before = text[..idx]
             .split_whitespace()
             .next_back()
@@ -1555,6 +1859,33 @@ fn repo_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+fn workspace_defaults_event(config: &GatewayConfig) -> ServerEvent {
+    let workspaces = config
+        .workspaces
+        .registry
+        .iter()
+        .map(|(id, entry)| WorkspaceSummary {
+            id: id.clone(),
+            path: entry.path.display().to_string(),
+            agent: entry.agent.clone(),
+            persona: entry.persona.clone(),
+            loadout: entry.loadout.clone(),
+        })
+        .collect::<Vec<_>>();
+    let default_entry = config
+        .workspaces
+        .default
+        .as_ref()
+        .and_then(|name| config.workspaces.registry.get(name));
+    ServerEvent::Defaults {
+        workspace: default_entry.map(|entry| entry.path.display().to_string()),
+        agent: default_entry.and_then(|entry| entry.agent.clone()),
+        persona: default_entry.and_then(|entry| entry.persona.clone()),
+        loadout: default_entry.and_then(|entry| entry.loadout.clone()),
+        workspaces,
+    }
+}
+
 async fn send_error<S>(ws: &mut S, code: &str, message: &str) -> Result<()>
 where
     S: SinkExt<Message> + Unpin,
@@ -1583,13 +1914,18 @@ where
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::PathBuf;
 
     use serde_json::json;
     use tempfile::tempdir;
 
+    use foxline_protocol::ServerEvent;
+
+    use crate::config::{GatewayConfig, WorkspaceEntry};
+
     use super::{
         fetch_cached_spqx_worker, model_label_from_value, model_labels_from_available_models,
-        normalize_tts_text, resolve_voice_reference, SentenceBuffer,
+        normalize_tts_text, resolve_voice_reference, workspace_defaults_event, SentenceBuffer,
     };
 
     #[test]
@@ -1674,6 +2010,53 @@ mod tests {
         assert_eq!(chunks, vec!["Short. This is long enough to speak now."]);
         assert!(buffer.push(" Tail without punctuation").is_empty());
         assert_eq!(buffer.flush().as_deref(), Some("Tail without punctuation"));
+    }
+
+    #[test]
+    fn sentence_buffer_does_not_split_inside_tokens_with_dots() {
+        let mut buffer = SentenceBuffer::default();
+
+        let chunks = buffer.push("Open the file crates/voice_gateway/src/ws.rs and check it.");
+
+        assert_eq!(
+            chunks,
+            vec!["Open the file crates/voice_gateway/src/ws.rs and check it."]
+        );
+    }
+
+    #[test]
+    fn sentence_buffer_overflow_cut_lands_on_word_boundary() {
+        let mut buffer = SentenceBuffer::default();
+
+        let text = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen";
+        let mut chunks = buffer.push(text);
+        chunks.extend(buffer.flush());
+
+        assert!(chunks.len() > 1);
+        for chunk in &chunks {
+            assert!(
+                text.split_whitespace().collect::<Vec<_>>().join(" ").contains(chunk),
+                "chunk split mid-word: {chunk:?}"
+            );
+        }
+        assert_eq!(chunks.join(" "), text);
+    }
+
+    #[test]
+    fn sentence_buffer_keeps_ordered_list_markers_with_their_items() {
+        let mut buffer = SentenceBuffer::default();
+
+        let chunks =
+            buffer.push("Here is the mission plan for today:\n1. Infiltrate the base quietly.");
+
+        assert_eq!(
+            chunks,
+            vec![
+                "Here is the mission plan for today:",
+                "1. Infiltrate the base quietly.",
+            ]
+        );
+        assert_eq!(buffer.flush(), None);
     }
 
     #[test]
@@ -1805,5 +2188,65 @@ reference_text = "voice/reference_audio/reference.txt"
 
         assert_eq!(reference.wav, ref_dir.join("voice.wav"));
         assert_eq!(reference.txt, ref_dir.join("voice.txt"));
+    }
+
+    #[test]
+    fn workspace_defaults_event_is_empty_without_registry() {
+        let config = GatewayConfig::default();
+
+        let event = workspace_defaults_event(&config);
+
+        assert_eq!(
+            event,
+            ServerEvent::Defaults {
+                workspace: None,
+                agent: None,
+                persona: None,
+                loadout: None,
+                workspaces: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn workspace_defaults_event_resolves_named_default_entry() {
+        let mut config = GatewayConfig::default();
+        config.workspaces.default = Some("main".to_string());
+        config.workspaces.registry.insert(
+            "main".to_string(),
+            WorkspaceEntry {
+                path: PathBuf::from("/repos/main"),
+                agent: Some("campbell".to_string()),
+                persona: Some("campbell".to_string()),
+                loadout: Some("default".to_string()),
+            },
+        );
+        config.workspaces.registry.insert(
+            "side".to_string(),
+            WorkspaceEntry {
+                path: PathBuf::from("/repos/side"),
+                agent: None,
+                persona: None,
+                loadout: None,
+            },
+        );
+
+        let event = workspace_defaults_event(&config);
+
+        let ServerEvent::Defaults {
+            workspace,
+            agent,
+            persona,
+            loadout,
+            workspaces,
+        } = event
+        else {
+            panic!("expected Defaults event");
+        };
+        assert_eq!(workspace.as_deref(), Some("/repos/main"));
+        assert_eq!(agent.as_deref(), Some("campbell"));
+        assert_eq!(persona.as_deref(), Some("campbell"));
+        assert_eq!(loadout.as_deref(), Some("default"));
+        assert_eq!(workspaces.len(), 2);
     }
 }

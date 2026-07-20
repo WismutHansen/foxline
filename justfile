@@ -55,6 +55,30 @@ overlayz-build:
 overlayz-tauri-check:
     bun run overlayz:tauri-check
 
+# Run a frontend skin together with the Voice Gateway.
+run frontend: install
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "{{frontend}}" != "overlayz" ]]; then
+        echo "Unknown frontend: {{frontend}}" >&2
+        echo "Usage: just run overlayz" >&2
+        exit 2
+    fi
+
+    scripts/start-services.sh --no-transcript-server --foreground &
+    stt_pid=$!
+    cargo run -p foxline-voice-gateway -- --bind 127.0.0.1:8780 &
+    gateway_pid=$!
+    cleanup() {
+        kill "$gateway_pid" "$stt_pid" 2>/dev/null || true
+        wait "$gateway_pid" 2>/dev/null || true
+        wait "$stt_pid" 2>/dev/null || true
+    }
+    trap cleanup EXIT INT TERM
+
+    cd apps/overlayz
+    bun tauri dev
+
 gateway *args:
     cargo run -p foxline-voice-gateway -- {{args}}
 
@@ -63,6 +87,19 @@ gateway-check:
 
 gateway-test:
     cargo test -p foxline-voice-gateway
+
+# Run the gateway with segment tracing on, e.g. `just gateway-debug-tts`
+gateway-debug-tts *args:
+    FOXLINE_GATEWAY_DEBUG_TRACES=true cargo run -p foxline-voice-gateway -- {{args}}
+
+# Tail exact strings sent to the TTS worker from the newest session trace
+tts-trace:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="${XDG_STATE_HOME:-$HOME/.local/state}/foxline/traces/rust-gateway"
+    latest=$(ls -t "$dir"/*.jsonl | head -1)
+    echo "tailing $latest" >&2
+    tail -f -n +1 "$latest" | jq -r --unbuffered 'select(.event == "tts_segment_queued") | "[\(.data.segment_index)] \(.data.reason)\n  raw:  \(.data.raw_text)\n  sent: \(.data.normalized_text)"'
 
 benchmark-rust-gateway *args:
     bun run benchmarks/run-rust-gateway-fixture.ts {{args}}

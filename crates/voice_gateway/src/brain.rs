@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
+    net::SocketAddr,
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -72,6 +73,7 @@ pub struct PiLaunch {
     pub command: String,
     pub args: Vec<String>,
     pub cwd: PathBuf,
+    pub envs: Vec<(String, String)>,
 }
 
 impl PiLaunch {
@@ -79,6 +81,7 @@ impl PiLaunch {
         config: &BrainConfig,
         identity: &BrainIdentity,
         loadout: &ResolvedLoadout,
+        control_addr: SocketAddr,
     ) -> Self {
         let mut args = vec![
             "--mode".to_string(),
@@ -146,11 +149,18 @@ impl PiLaunch {
             args.push(extension.display().to_string());
         }
 
-        let _ = identity;
+        // Lets the (opt-in) switch_agent extension tool reach this session's
+        // owning gateway connection directly, without the gateway needing to
+        // parse Pi's own tool-call stream. See `crates/voice_gateway/src/control.rs`.
+        let envs = vec![
+            ("FOXLINE_CONTROL_ADDR".to_string(), control_addr.to_string()),
+            ("FOXLINE_CONTROL_TOKEN".to_string(), identity.session_name()),
+        ];
         Self {
             command: config.pi_command.clone(),
             args,
             cwd: loadout.workspace.clone(),
+            envs,
         }
     }
 
@@ -180,6 +190,7 @@ impl PiLaunch {
             command: self.command.clone(),
             args,
             cwd: self.cwd.clone(),
+            envs: self.envs.clone(),
         }
     }
 }
@@ -192,6 +203,7 @@ fn spawn_model_warmup(launch: PiLaunch) {
         let child = Command::new(&launch.command)
             .args(&launch.args)
             .current_dir(&launch.cwd)
+            .envs(launch.envs.clone())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -235,13 +247,14 @@ impl BrainPool {
         &self,
         identity: BrainIdentity,
         loadout: &ResolvedLoadout,
+        control_addr: SocketAddr,
     ) -> Result<Arc<Mutex<PiRpcBrain>>> {
         let mut brains = self.brains.lock().await;
         if let Some(brain) = brains.get(&identity) {
             return Ok(Arc::clone(brain));
         }
 
-        let launch = PiLaunch::build(&self.config, &identity, loadout);
+        let launch = PiLaunch::build(&self.config, &identity, loadout, control_addr);
         // Prewarm only spawns the Pi process; the provider still loads the
         // model lazily on the first prompt (measured: 10s first-turn on a
         // cold LM Studio 26B). The ephemeral warmup fixes that without
@@ -339,6 +352,7 @@ impl PiRpcBrain {
         let mut child = Command::new(&self.launch.command)
             .args(&self.launch.args)
             .current_dir(&self.launch.cwd)
+            .envs(self.launch.envs.clone())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -835,7 +849,8 @@ mod tests {
             &json!({ "tools": ["codec.display"] }),
         );
 
-        let launch = PiLaunch::build(&BrainConfig::default(), &identity, &resolved);
+        let control_addr: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let launch = PiLaunch::build(&BrainConfig::default(), &identity, &resolved, control_addr);
 
         assert_eq!(launch.command, "pi");
         assert_eq!(launch.cwd, dir.path());
@@ -875,6 +890,13 @@ mod tests {
             .args
             .iter()
             .any(|arg| arg.ends_with(".foxline/extensions/frontend-tools")));
+        assert!(launch
+            .envs
+            .contains(&("FOXLINE_CONTROL_ADDR".to_string(), control_addr.to_string())));
+        assert!(launch
+            .envs
+            .iter()
+            .any(|(key, value)| key == "FOXLINE_CONTROL_TOKEN" && value == &identity.session_name()));
     }
 
     #[test]

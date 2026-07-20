@@ -1,6 +1,7 @@
 pub mod avatar;
 pub mod brain;
 pub mod config;
+pub mod control;
 pub mod frame;
 pub mod loadout;
 pub mod pipeline;

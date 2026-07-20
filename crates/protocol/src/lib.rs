@@ -10,6 +10,7 @@ pub enum ClientControl {
         client: String,
         capabilities: FrontendCapabilities,
         debug_traces: Option<bool>,
+        token: Option<String>,
     },
     StartSession {
         agent: String,
@@ -54,12 +55,29 @@ pub struct AudioCapabilities {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
+pub struct WorkspaceSummary {
+    pub id: String,
+    pub path: String,
+    pub agent: Option<String>,
+    pub persona: Option<String>,
+    pub loadout: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum ServerEvent {
     Hello {
         protocol_version: u32,
         binary_audio: bool,
+    },
+    Defaults {
+        workspace: Option<String>,
+        agent: Option<String>,
+        persona: Option<String>,
+        loadout: Option<String>,
+        workspaces: Vec<WorkspaceSummary>,
     },
     SessionStarted {
         session_id: String,
@@ -118,6 +136,15 @@ pub enum ServerEvent {
     FrontendToolRejected {
         name: String,
         reason: String,
+    },
+    AgentSwitched {
+        workspace: String,
+        agent: String,
+        persona: String,
+        loadout: String,
+    },
+    AgentSwitchFailed {
+        error: String,
     },
 }
 
