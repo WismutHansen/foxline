@@ -265,7 +265,7 @@ fn status_to_vad_frames(session_id: &SessionId, message: Option<&str>) -> Vec<Fr
 }
 
 /// Transport for the eaRS STT backend (ADR 0007). Both variants share the same
-/// [`ears_message_to_frames`] mapping; only process lifecycle differs.
+/// [`EarsFrameMapper`] mapping; only process lifecycle differs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EarsTransport {
     /// Gateway spawns and owns a local `ears-server` on loopback (low latency).
@@ -418,11 +418,12 @@ impl EarsSttAdapter {
         });
 
         tokio::spawn(async move {
+            let mut mapper = EarsFrameMapper::default();
             while let Some(message) = read.next().await {
                 let Ok(Message::Text(text)) = message else {
                     continue;
                 };
-                match ears_message_to_frames(&reader_session_id, &text) {
+                match mapper.map(&reader_session_id, &text) {
                     Ok(frames) => {
                         for frame in frames {
                             if event_tx.send(frame).await.is_err() {
@@ -525,55 +526,96 @@ struct EarsMessage {
     active: Option<bool>,
 }
 
-/// Map an eaRS WebSocket message (internally tagged, lowercase) onto canonical
-/// Foxline frames. The `speech` boundary event is authoritative for turn logic,
-/// so `pause` is intentionally ignored to avoid double-firing `SpeechStopped`.
-pub fn ears_message_to_frames(session_id: &SessionId, text: &str) -> Result<Vec<FrameEnvelope>> {
-    let message: EarsMessage = serde_json::from_str(text)?;
-    Ok(match message.message_type.as_str() {
-        "word" => message
-            .word
-            .filter(|word| !word.trim().is_empty())
-            .map(|word| {
-                vec![FrameEnvelope::new(
+/// Maps eaRS WebSocket messages (internally tagged, lowercase) onto canonical
+/// Foxline frames. eaRS streams individual `word` messages and only emits a
+/// `final` at session teardown, so the per-turn transcript is accumulated here:
+/// each `word` grows the current turn and emits a `Partial` with the full text
+/// so far, and the end-of-turn `speech`/`active:false` boundary finalizes it
+/// into `SpeechStopped` + `Final`. `pause` is ignored so it does not double-fire
+/// with `speech`.
+#[derive(Default)]
+pub struct EarsFrameMapper {
+    turn_text: String,
+    in_turn: bool,
+}
+
+impl EarsFrameMapper {
+    pub fn map(&mut self, session_id: &SessionId, text: &str) -> Result<Vec<FrameEnvelope>> {
+        let message: EarsMessage = serde_json::from_str(text)?;
+        Ok(match message.message_type.as_str() {
+            "word" => {
+                let Some(word) = message.word.filter(|word| !word.trim().is_empty()) else {
+                    return Ok(Vec::new());
+                };
+                let mut frames = Vec::new();
+                // eaRS does not reliably emit a speech-start for the very first
+                // utterance, so the first word of a turn opens it.
+                if !self.in_turn {
+                    self.in_turn = true;
+                    frames.push(FrameEnvelope::new(
+                        session_id.clone(),
+                        Frame::Vad(VadFrame::SpeechStarted),
+                    ));
+                }
+                if !self.turn_text.is_empty() {
+                    self.turn_text.push(' ');
+                }
+                self.turn_text.push_str(word.trim());
+                frames.push(FrameEnvelope::new(
                     session_id.clone(),
                     Frame::Stt(SttFrame::Partial {
-                        text: word,
+                        text: self.turn_text.clone(),
                         confidence: None,
                     }),
-                )]
-            })
-            .unwrap_or_default(),
-        "final" => message
-            .text
-            .filter(|text| !text.trim().is_empty())
-            .map(|text| {
-                vec![
-                    FrameEnvelope::new(session_id.clone(), Frame::Vad(VadFrame::SpeechStopped)),
-                    FrameEnvelope::new(
-                        session_id.clone(),
-                        Frame::Stt(SttFrame::Final {
-                            text,
-                            confidence: None,
-                        }),
-                    ),
-                ]
-            })
-            .unwrap_or_default(),
-        "speech" => match message.active {
-            Some(true) => vec![FrameEnvelope::new(
+                ));
+                frames
+            }
+            "speech" => match message.active {
+                Some(true) => {
+                    if self.in_turn {
+                        Vec::new()
+                    } else {
+                        self.in_turn = true;
+                        vec![FrameEnvelope::new(
+                            session_id.clone(),
+                            Frame::Vad(VadFrame::SpeechStarted),
+                        )]
+                    }
+                }
+                Some(false) => self.finalize(session_id),
+                None => Vec::new(),
+            },
+            // eaRS `final` is a session-teardown transcript; prefer its cleaned
+            // text over the accumulated words, then finalize any open turn.
+            "final" => {
+                if let Some(text) = message.text.filter(|text| !text.trim().is_empty()) {
+                    self.turn_text = text.trim().to_string();
+                }
+                self.finalize(session_id)
+            }
+            // `pause`, `status`, `languagechanged`, `enginechanged`: not turn-authoritative.
+            _ => Vec::new(),
+        })
+    }
+
+    fn finalize(&mut self, session_id: &SessionId) -> Vec<FrameEnvelope> {
+        self.in_turn = false;
+        let text = std::mem::take(&mut self.turn_text);
+        let mut frames = vec![FrameEnvelope::new(
+            session_id.clone(),
+            Frame::Vad(VadFrame::SpeechStopped),
+        )];
+        if !text.trim().is_empty() {
+            frames.push(FrameEnvelope::new(
                 session_id.clone(),
-                Frame::Vad(VadFrame::SpeechStarted),
-            )],
-            Some(false) => vec![FrameEnvelope::new(
-                session_id.clone(),
-                Frame::Vad(VadFrame::SpeechStopped),
-            )],
-            None => Vec::new(),
-        },
-        // `pause`, `status`, `languagechanged`, `enginechanged`: not turn-authoritative.
-        _ => Vec::new(),
-    })
+                Frame::Stt(SttFrame::Final {
+                    text,
+                    confidence: None,
+                }),
+            ));
+        }
+        frames
+    }
 }
 
 pub fn stt_trace_event(frame: &FrameEnvelope) -> Option<(&'static str, serde_json::Value)> {
@@ -614,12 +656,18 @@ pub fn ensure_supported_stt_backend(name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::frame::{Frame, SessionId, SttFrame, VadFrame};
+    use crate::frame::{Frame, FrameEnvelope, SessionId, SttFrame, VadFrame};
 
     use super::{
-        ears_message_to_frames, ensure_supported_stt_backend, parakeet_message_to_frames,
-        pcm16le_to_f32le, stt_trace_event,
+        ensure_supported_stt_backend, parakeet_message_to_frames, pcm16le_to_f32le,
+        stt_trace_event, EarsFrameMapper,
     };
+
+    fn ears_frames(text: &str) -> Vec<FrameEnvelope> {
+        EarsFrameMapper::default()
+            .map(&SessionId::new(), text)
+            .unwrap()
+    }
 
     #[test]
     fn ears_backend_is_supported() {
@@ -654,55 +702,91 @@ mod tests {
     }
 
     #[test]
-    fn ears_speech_events_map_to_vad_boundaries() {
+    fn ears_speech_active_false_finalizes_open_turn() {
         let session_id = SessionId::new();
-        let start = ears_message_to_frames(
-            &session_id,
-            r#"{"type":"speech","active":true,"timestamp":1.0}"#,
-        )
-        .unwrap();
+        let mut mapper = EarsFrameMapper::default();
+        // First word opens the turn (SpeechStarted) and grows the partial.
+        let first = mapper
+            .map(
+                &session_id,
+                r#"{"type":"word","word":"hello","start_time":0.0}"#,
+            )
+            .unwrap();
         assert!(matches!(
-            start[0].frame,
+            first[0].frame,
             Frame::Vad(VadFrame::SpeechStarted)
         ));
-        let stop = ears_message_to_frames(
-            &session_id,
-            r#"{"type":"speech","active":false,"timestamp":2.0}"#,
-        )
-        .unwrap();
-        assert!(matches!(stop[0].frame, Frame::Vad(VadFrame::SpeechStopped)));
+        // End-of-turn boundary finalizes into SpeechStopped + Final.
+        let end = mapper
+            .map(
+                &session_id,
+                r#"{"type":"speech","active":false,"timestamp":2.0}"#,
+            )
+            .unwrap();
+        assert!(matches!(end[0].frame, Frame::Vad(VadFrame::SpeechStopped)));
+        assert!(matches!(
+            &end[1].frame,
+            Frame::Stt(SttFrame::Final { text, .. }) if text == "hello"
+        ));
     }
 
     #[test]
-    fn ears_final_stops_speech_and_emits_final_transcript() {
+    fn ears_words_accumulate_into_growing_partials() {
         let session_id = SessionId::new();
-        let frames =
-            ears_message_to_frames(&session_id, r#"{"type":"final","text":"done","words":[]}"#)
-                .unwrap();
+        let mut mapper = EarsFrameMapper::default();
+        mapper
+            .map(
+                &session_id,
+                r#"{"type":"word","word":"open","start_time":0.0}"#,
+            )
+            .unwrap();
+        let second = mapper
+            .map(
+                &session_id,
+                r#"{"type":"word","word":"the","start_time":0.1}"#,
+            )
+            .unwrap();
+        // The partial carries the full turn so far, not just the last word.
         assert!(matches!(
-            frames[0].frame,
-            Frame::Vad(VadFrame::SpeechStopped)
+            second.last().map(|f| &f.frame),
+            Some(Frame::Stt(SttFrame::Partial { text, .. })) if text == "open the"
         ));
+        let third = mapper
+            .map(
+                &session_id,
+                r#"{"type":"word","word":"door","start_time":0.2}"#,
+            )
+            .unwrap();
         assert!(matches!(
-            frames[1].frame,
-            Frame::Stt(SttFrame::Final { .. })
+            third.last().map(|f| &f.frame),
+            Some(Frame::Stt(SttFrame::Partial { text, .. })) if text == "open the door"
+        ));
+        // A new turn starts fresh after finalization.
+        mapper
+            .map(
+                &session_id,
+                r#"{"type":"speech","active":false,"timestamp":1.0}"#,
+            )
+            .unwrap();
+        let next = mapper
+            .map(
+                &session_id,
+                r#"{"type":"word","word":"again","start_time":2.0}"#,
+            )
+            .unwrap();
+        assert!(matches!(
+            next.last().map(|f| &f.frame),
+            Some(Frame::Stt(SttFrame::Partial { text, .. })) if text == "again"
         ));
     }
 
     #[test]
     fn ears_pause_and_status_are_not_turn_authoritative() {
-        let session_id = SessionId::new();
+        assert!(ears_frames(r#"{"type":"pause","timestamp":1.0}"#).is_empty());
         assert!(
-            ears_message_to_frames(&session_id, r#"{"type":"pause","timestamp":1.0}"#)
-                .unwrap()
+            ears_frames(r#"{"type":"status","paused":false,"vad":true,"timestamps":false}"#)
                 .is_empty()
         );
-        assert!(ears_message_to_frames(
-            &session_id,
-            r#"{"type":"status","paused":false,"vad":true,"timestamps":false}"#
-        )
-        .unwrap()
-        .is_empty());
     }
 
     #[test]
