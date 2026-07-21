@@ -31,7 +31,10 @@ use crate::{
     loadout::LoadoutResolver,
     persona::{PersonaRegistry, ResolvedPersona, VoiceReference},
     pipeline::{default_pipeline, LinearPipeline},
-    stt::{stt_trace_event, ParakeetSileroConfig, ParakeetSileroSttAdapter, SttAdapter},
+    stt::{
+        stt_trace_event, EarsConfig, EarsSttAdapter, EarsTransport, ParakeetSileroConfig,
+        ParakeetSileroSttAdapter, SttAdapter,
+    },
     tools::{FrontendToolNegotiation, FrontendToolRouter},
     trace::{
         TraceWriter, EVENT_BARGE_IN_RECEIVED, EVENT_BRAIN_FIRST_TOKEN, EVENT_BRAIN_REQUEST_START,
@@ -1535,11 +1538,30 @@ async fn process_pipeline_outputs(
 }
 
 fn build_stt_adapter(name: &str) -> Result<Box<dyn SttAdapter>> {
-    crate::stt::ensure_supported_stt_backend(name)?;
+    // FOXLINE_STT_BACKEND overrides the loadout's adapter name so a backend can
+    // be A/B'd without editing loadouts.
+    let backend = env::var("FOXLINE_STT_BACKEND").unwrap_or_else(|_| name.to_string());
+    crate::stt::ensure_supported_stt_backend(&backend)?;
+    let url = env::var("FOXLINE_STT_WS_URL")
+        .or_else(|_| env::var("VITE_PARAKEET_CPP_STT_URL"))
+        .unwrap_or_else(|_| "ws://127.0.0.1:8796/ws".to_string());
+
+    if backend == "ears" {
+        let transport = match env::var("FOXLINE_EARS_TRANSPORT").as_deref() {
+            Ok("remote") => EarsTransport::Remote,
+            _ => EarsTransport::Managed,
+        };
+        let config = EarsConfig {
+            transport,
+            engine: env::var("FOXLINE_EARS_ENGINE").unwrap_or_else(|_| "parakeet-rs".to_string()),
+            url,
+            ..EarsConfig::default()
+        };
+        return Ok(Box::new(EarsSttAdapter::new(config)));
+    }
+
     let config = ParakeetSileroConfig {
-        url: env::var("FOXLINE_STT_WS_URL")
-            .or_else(|_| env::var("VITE_PARAKEET_CPP_STT_URL"))
-            .unwrap_or_else(|_| "ws://127.0.0.1:8796/ws".to_string()),
+        url,
         ..ParakeetSileroConfig::default()
     };
     Ok(Box::new(ParakeetSileroSttAdapter::new(config)))

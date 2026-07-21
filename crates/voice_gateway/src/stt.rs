@@ -370,6 +370,152 @@ pub async fn ensure_ears_server(config: &EarsConfig) -> Result<EarsServerHandle>
     bail!("managed ears-server did not become ready at {host}:{port} within timeout")
 }
 
+/// STT adapter that talks to an eaRS server (ADR 0007). In managed transport it
+/// adopts a running `ears-server` or spawns one; in remote transport it connects
+/// to a configured address. Engine selection is forwarded to eaRS.
+pub struct EarsSttAdapter {
+    config: EarsConfig,
+    server: Option<EarsServerHandle>,
+    sender: Option<mpsc::Sender<Message>>,
+    events: Option<mpsc::Receiver<FrameEnvelope>>,
+    trace: Option<TraceWriter>,
+}
+
+impl EarsSttAdapter {
+    pub fn new(config: EarsConfig) -> Self {
+        Self {
+            config,
+            server: None,
+            sender: None,
+            events: None,
+            trace: None,
+        }
+    }
+
+    pub fn with_trace(mut self, trace: TraceWriter) -> Self {
+        self.trace = Some(trace);
+        self
+    }
+
+    async fn connect(&mut self, session_id: SessionId) -> Result<()> {
+        if self.sender.is_some() {
+            return Ok(());
+        }
+        self.server = Some(ensure_ears_server(&self.config).await?);
+
+        let (ws, _) = connect_async(&self.config.url).await?;
+        let (mut write, mut read) = ws.split();
+        let (tx, mut rx) = mpsc::channel::<Message>(128);
+        let (event_tx, event_rx) = mpsc::channel::<FrameEnvelope>(128);
+        let reader_session_id = session_id.clone();
+
+        tokio::spawn(async move {
+            while let Some(message) = rx.recv().await {
+                if write.send(message).await.is_err() {
+                    return;
+                }
+            }
+        });
+
+        tokio::spawn(async move {
+            while let Some(message) = read.next().await {
+                let Ok(Message::Text(text)) = message else {
+                    continue;
+                };
+                match ears_message_to_frames(&reader_session_id, &text) {
+                    Ok(frames) => {
+                        for frame in frames {
+                            if event_tx.send(frame).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let frame = FrameEnvelope::new(
+                            reader_session_id.clone(),
+                            Frame::Stt(SttFrame::Error {
+                                message: err.to_string(),
+                            }),
+                        );
+                        if event_tx.send(frame).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+
+        // Request the configured engine; eaRS keeps its default if unavailable.
+        tx.send(Message::Text(
+            json!({ "type": "setengine", "engine": self.config.engine }).to_string(),
+        ))
+        .await?;
+        tx.send(Message::Text(json!({ "type": "getstatus" }).to_string()))
+            .await?;
+
+        self.sender = Some(tx);
+        self.events = Some(event_rx);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl SttAdapter for EarsSttAdapter {
+    async fn send_pcm(&mut self, session_id: SessionId, pcm: Bytes) -> Result<FrameEnvelope> {
+        self.connect(session_id.clone()).await?;
+        if let Some(sender) = &self.sender {
+            sender
+                .send(Message::Binary(pcm16le_to_f32le(&pcm)?.to_vec()))
+                .await?;
+        }
+        Ok(FrameEnvelope::new(
+            session_id,
+            Frame::Vad(VadFrame::FrontendHint {
+                speaking: true,
+                confidence: None,
+            }),
+        ))
+    }
+
+    async fn reset(&mut self) -> Result<()> {
+        if let Some(sender) = &self.sender {
+            sender
+                .send(Message::Text(json!({ "type": "pause" }).to_string()))
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<()> {
+        self.sender = None;
+        self.events = None;
+        if let Some(mut server) = self.server.take() {
+            server.shutdown().await;
+        }
+        Ok(())
+    }
+
+    fn try_next_frame(&mut self) -> Option<FrameEnvelope> {
+        let frame = self.events.as_mut()?.try_recv().ok()?;
+        if let Some(trace) = &self.trace {
+            if let Some((event, data)) = stt_trace_event(&frame) {
+                let _ = trace.event(event, data);
+            }
+        }
+        Some(frame)
+    }
+
+    async fn next_frame(&mut self) -> Option<FrameEnvelope> {
+        let frame = self.events.as_mut()?.recv().await?;
+        if let Some(trace) = &self.trace {
+            if let Some((event, data)) = stt_trace_event(&frame) {
+                let _ = trace.event(event, data);
+            }
+        }
+        Some(frame)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct EarsMessage {
     #[serde(rename = "type")]
