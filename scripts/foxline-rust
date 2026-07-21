@@ -5,12 +5,18 @@ usage() {
   cat <<'EOF'
 Usage: scripts/foxline-rust
 
-Starts Foxline in tmux with Parakeet/Silero STT, the Rust Voice Gateway,
+Starts Foxline in tmux with an eaRS STT server, the Rust Voice Gateway,
 and the Vite frontend configured to connect directly to the Rust gateway.
+
+The eaRS server (ears-server, on PATH) is started in its own window and the
+gateway adopts it via the managed eaRS STT backend, so the engine model loads
+once at boot instead of on the first spoken word.
 
 Environment:
   FOXLINE_TMUX_SESSION       tmux session name (default: foxline-rust)
   FOXLINE_GATEWAY_BIND       gateway bind address (default: 127.0.0.1:8780)
+  FOXLINE_EARS_ENGINE        eaRS engine: kyutai|parakeet-rs|transcribe-cpp (default: kyutai)
+  FOXLINE_STT_BIND           eaRS server bind address (default: 127.0.0.1:8796)
   VITE_PORT                  frontend port (default: 5173)
   CODEC_OPEN_BROWSER         open browser after startup, 1/0 (default: 1)
   CODEC_OPEN_BROWSER_DELAY   seconds before opening browser (default: 2)
@@ -37,6 +43,9 @@ SESSION="${FOXLINE_TMUX_SESSION:-foxline-rust}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GATEWAY_BIND="${FOXLINE_GATEWAY_BIND:-127.0.0.1:8780}"
 GATEWAY_URL="${VITE_FOXLINE_GATEWAY_URL:-ws://$GATEWAY_BIND}"
+EARS_ENGINE="${FOXLINE_EARS_ENGINE:-kyutai}"
+STT_BIND="${FOXLINE_STT_BIND:-127.0.0.1:8796}"
+STT_URL="${FOXLINE_STT_WS_URL:-ws://$STT_BIND/ws}"
 WEB_URL="${CODEC_WEB_URL:-http://127.0.0.1:${VITE_PORT:-5173}/}"
 OPEN_BROWSER="${CODEC_OPEN_BROWSER:-1}"
 OPEN_BROWSER_DELAY="${CODEC_OPEN_BROWSER_DELAY:-2}"
@@ -56,6 +65,12 @@ if ! command -v tmux >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v ears-server >/dev/null 2>&1; then
+  echo "ears-server not found on PATH. Install it from the eaRS repo, e.g.:" >&2
+  echo "  cd ~/byteowlz/eaRS && cargo install --path . --force --features apple" >&2
+  exit 1
+fi
+
 if tmux has-session -t "$SESSION" 2>/dev/null; then
   echo "tmux session '$SESSION' already exists."
   if [[ "$OPEN_BROWSER" == "1" ]]; then
@@ -67,10 +82,10 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
 fi
 
 tmux new-session -d -s "$SESSION" -n stt -c "$ROOT" \
-  'scripts/start-services.sh --no-transcript-server --foreground; echo; echo "Parakeet+Silero STT exited. Press enter to close."; read'
+  "ears-server --bind '$STT_BIND' --engine '$EARS_ENGINE'; echo; echo 'eaRS STT server exited. Press enter to close.'; read"
 
 tmux new-window -t "$SESSION" -n gateway -c "$ROOT" \
-  "sleep 2; FOXLINE_GATEWAY_BIND='$GATEWAY_BIND' FOXLINE_GATEWAY_TRACE_DIR='$TRACE_DIR' cargo run -p foxline-voice-gateway; echo; echo 'Rust gateway exited. Press enter to close.'; read"
+  "sleep 2; FOXLINE_GATEWAY_BIND='$GATEWAY_BIND' FOXLINE_GATEWAY_TRACE_DIR='$TRACE_DIR' FOXLINE_STT_BACKEND=ears FOXLINE_EARS_TRANSPORT=managed FOXLINE_EARS_ENGINE='$EARS_ENGINE' FOXLINE_STT_WS_URL='$STT_URL' cargo run -p foxline-voice-gateway; echo; echo 'Rust gateway exited. Press enter to close.'; read"
 
 tmux new-window -t "$SESSION" -n app -c "$ROOT" \
   "sleep 3; VITE_FOXLINE_GATEWAY_URL='$GATEWAY_URL' bun run dev; echo; echo 'Vite exited. Press enter to close.'; read"
@@ -82,7 +97,8 @@ if [[ "$OPEN_BROWSER" == "1" ]]; then
   echo "Opening browser: $WEB_URL"
 fi
 
-echo "Started tmux session '$SESSION' with Parakeet/Silero STT, Rust Voice Gateway, and Codec UI."
+echo "Started tmux session '$SESSION' with eaRS STT ($EARS_ENGINE), Rust Voice Gateway, and Codec UI."
+echo "STT: ws://$STT_BIND/ws (managed-adopt)"
 echo "Gateway: $GATEWAY_URL"
 echo "Frontend: $WEB_URL"
 echo "Trace dir: $TRACE_DIR"
