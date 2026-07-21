@@ -262,6 +262,99 @@ fn status_to_vad_frames(session_id: &SessionId, message: Option<&str>) -> Vec<Fr
     }
 }
 
+/// Transport for the eaRS STT backend (ADR 0007). Both variants share the same
+/// [`ears_message_to_frames`] mapping; only process lifecycle differs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EarsTransport {
+    /// Gateway spawns and owns a local `ears-server` on loopback (low latency).
+    Managed,
+    /// Gateway connects to an already-running `ears-server` (split services).
+    Remote,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EarsConfig {
+    pub transport: EarsTransport,
+    /// eaRS engine selector: `kyutai`, `parakeet-rs`, or `transcribe-cpp`.
+    /// Availability is negotiated with the server; unknown engines fall back
+    /// to the server default.
+    pub engine: String,
+    /// Used only when `transport == Remote`.
+    pub url: String,
+    pub input_sample_rate_hz: u32,
+}
+
+impl Default for EarsConfig {
+    fn default() -> Self {
+        Self {
+            transport: EarsTransport::Managed,
+            engine: "parakeet-rs".to_string(),
+            url: "ws://127.0.0.1:8796/ws".to_string(),
+            input_sample_rate_hz: 24_000,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct EarsMessage {
+    #[serde(rename = "type")]
+    message_type: String,
+    word: Option<String>,
+    text: Option<String>,
+    active: Option<bool>,
+}
+
+/// Map an eaRS WebSocket message (internally tagged, lowercase) onto canonical
+/// Foxline frames. The `speech` boundary event is authoritative for turn logic,
+/// so `pause` is intentionally ignored to avoid double-firing `SpeechStopped`.
+pub fn ears_message_to_frames(session_id: &SessionId, text: &str) -> Result<Vec<FrameEnvelope>> {
+    let message: EarsMessage = serde_json::from_str(text)?;
+    Ok(match message.message_type.as_str() {
+        "word" => message
+            .word
+            .filter(|word| !word.trim().is_empty())
+            .map(|word| {
+                vec![FrameEnvelope::new(
+                    session_id.clone(),
+                    Frame::Stt(SttFrame::Partial {
+                        text: word,
+                        confidence: None,
+                    }),
+                )]
+            })
+            .unwrap_or_default(),
+        "final" => message
+            .text
+            .filter(|text| !text.trim().is_empty())
+            .map(|text| {
+                vec![
+                    FrameEnvelope::new(session_id.clone(), Frame::Vad(VadFrame::SpeechStopped)),
+                    FrameEnvelope::new(
+                        session_id.clone(),
+                        Frame::Stt(SttFrame::Final {
+                            text,
+                            confidence: None,
+                        }),
+                    ),
+                ]
+            })
+            .unwrap_or_default(),
+        "speech" => match message.active {
+            Some(true) => vec![FrameEnvelope::new(
+                session_id.clone(),
+                Frame::Vad(VadFrame::SpeechStarted),
+            )],
+            Some(false) => vec![FrameEnvelope::new(
+                session_id.clone(),
+                Frame::Vad(VadFrame::SpeechStopped),
+            )],
+            None => Vec::new(),
+        },
+        // `pause`, `status`, `languagechanged`, `enginechanged`: not turn-authoritative.
+        _ => Vec::new(),
+    })
+}
+
 pub fn stt_trace_event(frame: &FrameEnvelope) -> Option<(&'static str, serde_json::Value)> {
     match &frame.frame {
         Frame::Stt(SttFrame::Partial { text, .. }) => Some((
@@ -290,7 +383,7 @@ fn pcm16le_to_f32le(pcm: &[u8]) -> Result<Bytes> {
 
 pub fn ensure_supported_stt_backend(name: &str) -> Result<()> {
     match name {
-        "parakeet-silero" => Ok(()),
+        "parakeet-silero" | "ears" => Ok(()),
         "parakeet" | "silero" | "whisper" | "nemotron" => {
             bail!("STT backend {name} is reserved but not implemented yet")
         }
@@ -303,8 +396,66 @@ mod tests {
     use crate::frame::{Frame, SessionId, SttFrame, VadFrame};
 
     use super::{
-        ensure_supported_stt_backend, parakeet_message_to_frames, pcm16le_to_f32le, stt_trace_event,
+        ears_message_to_frames, ensure_supported_stt_backend, parakeet_message_to_frames,
+        pcm16le_to_f32le, stt_trace_event,
     };
+
+    #[test]
+    fn ears_backend_is_supported() {
+        assert!(ensure_supported_stt_backend("ears").is_ok());
+    }
+
+    #[test]
+    fn ears_speech_events_map_to_vad_boundaries() {
+        let session_id = SessionId::new();
+        let start = ears_message_to_frames(
+            &session_id,
+            r#"{"type":"speech","active":true,"timestamp":1.0}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            start[0].frame,
+            Frame::Vad(VadFrame::SpeechStarted)
+        ));
+        let stop = ears_message_to_frames(
+            &session_id,
+            r#"{"type":"speech","active":false,"timestamp":2.0}"#,
+        )
+        .unwrap();
+        assert!(matches!(stop[0].frame, Frame::Vad(VadFrame::SpeechStopped)));
+    }
+
+    #[test]
+    fn ears_final_stops_speech_and_emits_final_transcript() {
+        let session_id = SessionId::new();
+        let frames =
+            ears_message_to_frames(&session_id, r#"{"type":"final","text":"done","words":[]}"#)
+                .unwrap();
+        assert!(matches!(
+            frames[0].frame,
+            Frame::Vad(VadFrame::SpeechStopped)
+        ));
+        assert!(matches!(
+            frames[1].frame,
+            Frame::Stt(SttFrame::Final { .. })
+        ));
+    }
+
+    #[test]
+    fn ears_pause_and_status_are_not_turn_authoritative() {
+        let session_id = SessionId::new();
+        assert!(
+            ears_message_to_frames(&session_id, r#"{"type":"pause","timestamp":1.0}"#)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(ears_message_to_frames(
+            &session_id,
+            r#"{"type":"status","paused":false,"vad":true,"timestamps":false}"#
+        )
+        .unwrap()
+        .is_empty());
+    }
 
     #[test]
     fn maps_word_and_interim_to_partial_transcripts() {

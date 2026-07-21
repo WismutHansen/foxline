@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Scaffolded the eaRS STT backend (ADR 0007): engine-agnostic `ears` backend with managed and remote transports and a shared eaRS-message-to-Foxline-frame mapping (`ears_message_to_frames`). Supports all eaRS engines (`kyutai`, `parakeet-rs`, `transcribe-cpp`) via engine passthrough. Retires the Python `parakeet-silero` server and PiBot worker once at parity. Tracked under `fxl-n3h5`.
+
 - Renamed repository Agent Persona prompts from `SYSTEM.md` to the same fixed `PROMPT.md` convention used by XDG Persona packages, and removed duplicate loadout prompt injection.
 - Added `scripts/sync-personas-to-xdg.sh` so the distributable `agents/` metadata and any local ignored voice/canned assets can seed `~/.local/share/foxline`; visual assets, backups, and copyrighted runtime files remain excluded from the Foxline repository.
 - Added gateway-owned XDG Persona packages with fixed `PROMPT.md`, validated voice/canned-speech paths, Work Directory overrides, Persona-aware Brain identities, and legacy sidecar compatibility.
