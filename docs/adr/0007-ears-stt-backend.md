@@ -19,6 +19,8 @@ The backend supports two transports behind one shared protocol-mapping layer:
 
 Only transport and process lifecycle differ between the two modes; the eaRS-message-to-Foxline-frame mapping is identical and lives in one place.
 
+Language selection is engine capability-driven. eaRS resolves client-friendly short codes to an engine's advertised locale (`en` to `en-US`, `de` to `de-DE`) and rejects unsupported requests without terminating the session. `auto` remains model-owned and does not guarantee reliable per-utterance language detection, especially for isolated words. Cross-language spqx/Qwen fixtures test transport retention only because cloned voices inherit the reference-language accent; native-language hub fixtures are required for ASR accuracy conclusions.
+
 For engines with revisable streaming hypotheses (notably transcribe.cpp), eaRS emits `Interim { text }` containing the authoritative `committed + tentative` preview. Append-only clients continue consuming `Word`; revisable UI clients replace their preview from `Interim`. At an ingress-VAD end-of-turn, transcribe.cpp finalizes and restarts its native stream, emits its complete snapshot, then emits `Speech { active: false }`. Cache-aware parakeet-rs instead retains decoder state, drains one zero chunk at a normal boundary (three only at final shutdown), flushes its complete pending token, then emits `Speech { active: false }`; resetting at every boundary loses sub-second utterances, while repeatedly injecting the full three-zero shutdown drain pollutes the retained cache. These engine-specific flush mechanics sit behind the common `EngineSession::send_speech_boundary` seam, preserving one external protocol and boundary order.
 
 ## Context
