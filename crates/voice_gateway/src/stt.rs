@@ -570,6 +570,30 @@ impl EarsFrameMapper {
                 ));
                 frames
             }
+            "interim" => {
+                let Some(text) = message.text.filter(|text| !text.trim().is_empty()) else {
+                    return Ok(Vec::new());
+                };
+                let mut frames = Vec::new();
+                if !self.in_turn {
+                    self.in_turn = true;
+                    frames.push(FrameEnvelope::new(
+                        session_id.clone(),
+                        Frame::Vad(VadFrame::SpeechStarted),
+                    ));
+                }
+                // `Interim` is authoritative and revisable (`committed +
+                // tentative`), so replace rather than append.
+                self.turn_text = text.trim().to_string();
+                frames.push(FrameEnvelope::new(
+                    session_id.clone(),
+                    Frame::Stt(SttFrame::Partial {
+                        text: self.turn_text.clone(),
+                        confidence: None,
+                    }),
+                ));
+                frames
+            }
             "speech" => match message.active {
                 Some(true) => {
                     if self.in_turn {
@@ -777,6 +801,32 @@ mod tests {
         assert!(matches!(
             next.last().map(|f| &f.frame),
             Some(Frame::Stt(SttFrame::Partial { text, .. })) if text == "again"
+        ));
+    }
+
+    #[test]
+    fn ears_interim_replaces_preview_and_finalizes_authoritative_text() {
+        let session_id = SessionId::new();
+        let mut mapper = EarsFrameMapper::default();
+        mapper
+            .map(&session_id, r#"{"type":"interim","text":"hello wor"}"#)
+            .unwrap();
+        let revised = mapper
+            .map(&session_id, r#"{"type":"interim","text":"hello world"}"#)
+            .unwrap();
+        assert!(matches!(
+            revised.last().map(|f| &f.frame),
+            Some(Frame::Stt(SttFrame::Partial { text, .. })) if text == "hello world"
+        ));
+        let final_frames = mapper
+            .map(
+                &session_id,
+                r#"{"type":"speech","active":false,"timestamp":1.0}"#,
+            )
+            .unwrap();
+        assert!(matches!(
+            &final_frames[1].frame,
+            Frame::Stt(SttFrame::Final { text, .. }) if text == "hello world"
         ));
     }
 

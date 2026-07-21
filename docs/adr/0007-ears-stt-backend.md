@@ -19,6 +19,8 @@ The backend supports two transports behind one shared protocol-mapping layer:
 
 Only transport and process lifecycle differ between the two modes; the eaRS-message-to-Foxline-frame mapping is identical and lives in one place.
 
+For engines with revisable streaming hypotheses (notably transcribe.cpp), eaRS emits `Interim { text }` containing the authoritative `committed + tentative` preview. Append-only clients continue consuming `Word`; revisable UI clients replace their preview from `Interim`. At an ingress-VAD end-of-turn, transcribe.cpp finalizes and restarts its native stream, emits its complete snapshot, then emits `Speech { active: false }`. This ordering prevents trailing words from arriving after Foxline commits the turn and allows multiple utterances on one WebSocket.
+
 ## Context
 
 Foxline's turn strategy (`turn.rs`) is authoritative over barge-in and interruption and depends on explicit speech-boundary events. Today those come from the Python silero layer as `{"type":"status"}` messages carrying `speech_start` / `speech_stop`, which `stt.rs` maps to `VadFrame::SpeechStarted` / `SpeechStopped`.
