@@ -1,10 +1,12 @@
-use anyhow::{bail, Result};
+use std::time::Duration;
+
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
-use tokio::sync::mpsc;
+use tokio::{net::TcpStream, process::Child, sync::mpsc};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::{
@@ -295,6 +297,79 @@ impl Default for EarsConfig {
     }
 }
 
+/// Whether the managed transport adopted an already-running server or spawned
+/// its own. Only a spawned server is ours to shut down.
+#[derive(Debug)]
+pub enum EarsServerHandle {
+    Adopted,
+    Spawned(Child),
+}
+
+impl EarsServerHandle {
+    /// Terminate the server only if this handle spawned it. Adopting a
+    /// pre-existing server must never kill it out from under its owner.
+    pub async fn shutdown(&mut self) {
+        if let EarsServerHandle::Spawned(child) = self {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+        }
+    }
+}
+
+/// Split `host:port` from a `ws://host:port/path` URL for a raw TCP reachability
+/// probe. Falls back to the loopback STT port when the URL lacks an authority.
+pub fn ears_host_port(url: &str) -> (String, u16) {
+    let after_scheme = url.split("://").nth(1).unwrap_or(url);
+    let authority = after_scheme.split('/').next().unwrap_or(after_scheme);
+    match authority.rsplit_once(':') {
+        Some((host, port)) => (host.to_string(), port.parse().unwrap_or(8796)),
+        None => (authority.to_string(), 8796),
+    }
+}
+
+/// True if a TCP listener already accepts connections at `host:port`.
+pub async fn ears_server_reachable(host: &str, port: u16) -> bool {
+    matches!(
+        tokio::time::timeout(Duration::from_millis(250), TcpStream::connect((host, port)),).await,
+        Ok(Ok(_))
+    )
+}
+
+/// Adopt a running `ears-server` if one is reachable at the configured address,
+/// otherwise spawn one and wait until it accepts connections. The gateway only
+/// owns (and later shuts down) a server it spawned itself.
+pub async fn ensure_ears_server(config: &EarsConfig) -> Result<EarsServerHandle> {
+    let (host, port) = ears_host_port(&config.url);
+
+    if ears_server_reachable(&host, port).await {
+        return Ok(EarsServerHandle::Adopted);
+    }
+    if config.transport == EarsTransport::Remote {
+        bail!("no ears-server reachable at {host}:{port} (remote transport does not spawn)");
+    }
+
+    let bin =
+        std::env::var("FOXLINE_EARS_SERVER_BIN").unwrap_or_else(|_| "ears-server".to_string());
+    let child = tokio::process::Command::new(&bin)
+        .arg("--bind")
+        .arg(format!("{host}:{port}"))
+        .arg("--engine")
+        .arg(&config.engine)
+        .kill_on_drop(true)
+        .spawn()
+        .with_context(|| format!("failed to spawn managed ears-server ({bin})"))?;
+
+    for _ in 0..100 {
+        if ears_server_reachable(&host, port).await {
+            return Ok(EarsServerHandle::Spawned(child));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let mut handle = EarsServerHandle::Spawned(child);
+    handle.shutdown().await;
+    bail!("managed ears-server did not become ready at {host}:{port} within timeout")
+}
+
 #[derive(Debug, Deserialize)]
 struct EarsMessage {
     #[serde(rename = "type")]
@@ -403,6 +478,33 @@ mod tests {
     #[test]
     fn ears_backend_is_supported() {
         assert!(ensure_supported_stt_backend("ears").is_ok());
+    }
+
+    #[test]
+    fn ears_host_port_parses_ws_url() {
+        use super::ears_host_port;
+        assert_eq!(
+            ears_host_port("ws://127.0.0.1:8796/ws"),
+            ("127.0.0.1".to_string(), 8796)
+        );
+        assert_eq!(
+            ears_host_port("ws://stt.lan:9001"),
+            ("stt.lan".to_string(), 9001)
+        );
+        assert_eq!(ears_host_port("localhost"), ("localhost".to_string(), 8796));
+    }
+
+    #[tokio::test]
+    async fn ears_remote_transport_does_not_spawn_when_unreachable() {
+        use super::{ensure_ears_server, EarsConfig, EarsTransport};
+        let config = EarsConfig {
+            transport: EarsTransport::Remote,
+            // Reserved-for-documentation address that never accepts connections.
+            url: "ws://192.0.2.1:9/ws".to_string(),
+            ..EarsConfig::default()
+        };
+        let err = ensure_ears_server(&config).await.unwrap_err();
+        assert!(err.to_string().contains("does not spawn"), "{err}");
     }
 
     #[test]
