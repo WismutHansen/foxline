@@ -19,7 +19,7 @@ The backend supports two transports behind one shared protocol-mapping layer:
 
 Only transport and process lifecycle differ between the two modes; the eaRS-message-to-Foxline-frame mapping is identical and lives in one place.
 
-For engines with revisable streaming hypotheses (notably transcribe.cpp), eaRS emits `Interim { text }` containing the authoritative `committed + tentative` preview. Append-only clients continue consuming `Word`; revisable UI clients replace their preview from `Interim`. At an ingress-VAD end-of-turn, transcribe.cpp finalizes and restarts its native stream, emits its complete snapshot, then emits `Speech { active: false }`. This ordering prevents trailing words from arriving after Foxline commits the turn and allows multiple utterances on one WebSocket.
+For engines with revisable streaming hypotheses (notably transcribe.cpp), eaRS emits `Interim { text }` containing the authoritative `committed + tentative` preview. Append-only clients continue consuming `Word`; revisable UI clients replace their preview from `Interim`. At an ingress-VAD end-of-turn, transcribe.cpp finalizes and restarts its native stream, emits its complete snapshot, then emits `Speech { active: false }`. Cache-aware parakeet-rs instead retains decoder state, drains one zero chunk at a normal boundary (three only at final shutdown), flushes its complete pending token, then emits `Speech { active: false }`; resetting at every boundary loses sub-second utterances, while repeatedly injecting the full three-zero shutdown drain pollutes the retained cache. These engine-specific flush mechanics sit behind the common `EngineSession::send_speech_boundary` seam, preserving one external protocol and boundary order.
 
 ## Context
 

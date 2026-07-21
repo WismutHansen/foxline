@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed parakeet-rs loss across pauses and short utterances: it now flushes at the shared ingress-VAD boundary without resetting its cache, uses a minimal one-zero-chunk boundary drain (three only at final shutdown), and no longer runs a conflicting engine-local VAD or 800ms fragment timer. A 38s two-speaker spqx fixture with ten utterances, 0.7–3.0s pauses, and four single-word turns retained 10/10 segments.
 - Fixed transcribe.cpp live streaming through eaRS: `Interim { text }` now carries the authoritative revisable preview (`committed + tentative`), eliminating the apparent ~11-second stall; committed words are never force-flushed mid-token; and an ingress-VAD end-of-turn finalizes/restarts the native stream before emitting `Speech(false)`, preserving ordering across multiple utterances on one connection.
 - eaRS gained a single engine-agnostic boundary VAD at the audio ingress that emits `Speech { active }` uniformly for all engines (kyutai, parakeet-rs, transcribe-cpp), so turn commit works regardless of engine. The gateway's `EarsFrameMapper` accumulates streamed words or replaces from authoritative interim snapshots and finalizes on the end-of-turn boundary.
 - Wired the `EarsSttAdapter` into the gateway with managed (adopt-or-spawn) and remote transports, engine passthrough, and spawned-only shutdown. Select with `FOXLINE_STT_BACKEND=ears` plus `FOXLINE_EARS_ENGINE` / `FOXLINE_EARS_TRANSPORT` / `FOXLINE_EARS_SERVER_BIN` (`fxl-n3h5.2`, `fxl-n3h5.3`).
