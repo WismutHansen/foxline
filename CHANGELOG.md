@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Wired the `EarsSttAdapter` into the gateway with managed (adopt-or-spawn) and remote transports, engine passthrough, and spawned-only shutdown. Select with `FOXLINE_STT_BACKEND=ears` plus `FOXLINE_EARS_ENGINE` / `FOXLINE_EARS_TRANSPORT` / `FOXLINE_EARS_SERVER_BIN` (`fxl-n3h5.2`, `fxl-n3h5.3`).
 - Scaffolded the eaRS STT backend (ADR 0007): engine-agnostic `ears` backend with managed and remote transports and a shared eaRS-message-to-Foxline-frame mapping (`ears_message_to_frames`). Supports all eaRS engines (`kyutai`, `parakeet-rs`, `transcribe-cpp`) via engine passthrough. Retires the Python `parakeet-silero` server and PiBot worker once at parity. Tracked under `fxl-n3h5`.
 
 - Renamed repository Agent Persona prompts from `SYSTEM.md` to the same fixed `PROMPT.md` convention used by XDG Persona packages, and removed duplicate loadout prompt injection.
