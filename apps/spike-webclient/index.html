@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>govnr voice</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; margin: 0; }
+      body {
+        min-height: 100dvh;
+        background: #101214;
+        color: #e8eaed;
+        font-family: -apple-system, system-ui, sans-serif;
+        display: flex; flex-direction: column;
+        align-items: center;
+      }
+      header { padding: 18px 0 4px; font-size: 13px; letter-spacing: .2em; color: #6b7280; text-transform: uppercase; }
+      main { flex: 1; width: 100%; max-width: 640px; display: flex; flex-direction: column; align-items: center; padding: 12px 16px; }
+      #orbWrap { height: 200px; display: flex; align-items: center; justify-content: center; }
+      #phaseLabel { color: #9ca3af; font-size: 14px; margin-top: 8px; min-height: 20px; }
+      #transcript { width: 100%; overflow-y: auto; flex: 1; padding: 8px 2px; }
+      .line { margin: 6px 0; line-height: 1.45; font-size: 15px; }
+      .line.user { color: #93c5fd; }
+      .line.assistant { color: #e8eaed; }
+      .line.system { color: #6b7280; font-size: 13px; }
+      form { width: 100%; display: flex; gap: 8px; padding: 10px 0 calc(12px + env(safe-area-inset-bottom)); }
+      input[type=text] {
+        flex: 1; background: #1a1d21; border: 1px solid #2a2f35; border-radius: 10px;
+        color: #e8eaed; padding: 12px 14px; font-size: 16px; outline: none;
+      }
+      button {
+        background: #2563eb; border: none; color: white; border-radius: 10px;
+        padding: 12px 18px; font-size: 15px; cursor: pointer;
+      }
+      button.secondary { background: #1a1d21; color: #9ca3af; border: 1px solid #2a2f35; }
+      button:disabled { opacity: .5; cursor: default; }
+      #micHint { font-size: 12px; color: #4b5563; padding-bottom: 8px; }
+    </style>
+  </head>
+  <body>
+    <header>govnr · voice</header>
+    <main>
+      <div id="orbWrap"></div>
+      <div id="phaseLabel"></div>
+      <div id="transcript"></div>
+      <form id="textForm">
+        <input id="textInput" type="text" placeholder="Type instead…" autocomplete="off" />
+        <button type="submit">Send</button>
+      </form>
+      <div id="micHint">voice is always-on · speak and pause to send</div>
+    </main>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

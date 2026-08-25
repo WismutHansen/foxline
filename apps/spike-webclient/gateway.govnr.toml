@@ -1,0 +1,35 @@
+# Foxline govnr-voice gateway: LAN/tailnet reachable, token-authed.
+bind = "0.0.0.0:8783"
+trace_dir = "/tmp/fxl-traces-govnr"
+debug_traces = false
+session_idle_timeout_ms = 600000
+
+[auth]
+token = "govnr-voice-spike"
+
+[brain]
+pi_command = "/tmp/pi-spike-wrapper.sh"
+idle_timeout_ms = 600000
+prewarm = false
+no_extensions = false
+no_context_files = true
+
+[turn]
+silence_timeout_ms = 650
+min_speech_duration_ms = 180
+max_utterance_duration_ms = 30000
+barge_in_confirmation_window_ms = 450
+commit_grace_ms = 2500
+
+[loadouts]
+default_name = "default"
+
+# The voice agent operates INSIDE the govnr repo so pi reads its AGENTS.md.
+[workspaces]
+default = "govnr"
+
+[workspaces.registry.govnr]
+path = "/Users/tommyfalkowski/byteowlz/govnr"
+agent = "campbell"
+persona = "campbell"
+loadout = "default"
