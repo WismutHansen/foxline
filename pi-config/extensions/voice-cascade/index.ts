@@ -49,7 +49,7 @@ const DEFAULT_CHANNEL: ChannelDef = {
 		url: process.env.FOXLINE_DRAFTER_URL ?? "http://localhost:11434",
 		model: process.env.FOXLINE_DRAFTER_MODEL ?? "gemma4:e2b",
 		api: "ollama" as const,
-		extra: { think: false },
+		extra: { think: false, keep_alive: "60m" },
 		maxTokens: Number(process.env.FOXLINE_DRAFT_MAX_TOKENS ?? 70),
 		timeoutMs: Number(process.env.FOXLINE_DRAFT_TIMEOUT_MS ?? 1500),
 		maxSentences: Number(process.env.FOXLINE_DRAFT_MAX_SENTENCES ?? 2),

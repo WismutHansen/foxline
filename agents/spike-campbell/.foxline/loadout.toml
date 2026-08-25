@@ -1,3 +1,5 @@
+extensions = ["extensions/voice-cascade"]
+
 [pi]
 model = "mac-gemma/gemma-4-26b-a4b"
 thinking = "minimal"
@@ -12,5 +14,3 @@ keep_warm_ms = 300000
 
 [tools]
 allowed_pi = ["read", "write", "edit", "pi_file_searcher", "pi_internet_search", "ask_orchestrator"]
-
-extensions = ["local:voice-cascade"]

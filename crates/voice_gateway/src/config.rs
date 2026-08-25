@@ -70,6 +70,9 @@ pub struct TurnStrategyConfig {
     pub min_speech_duration_ms: u64,
     pub max_utterance_duration_ms: u64,
     pub barge_in_confirmation_window_ms: u64,
+    /// Post-commit window that swallows STT-decoder flush partials and
+    /// boundary-VAD chatter so they are not treated as barge-in.
+    pub commit_grace_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -167,6 +170,7 @@ impl Default for TurnStrategyConfig {
             min_speech_duration_ms: 180,
             max_utterance_duration_ms: 30_000,
             barge_in_confirmation_window_ms: 450,
+            commit_grace_ms: 500,
         }
     }
 }

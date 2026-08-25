@@ -21,6 +21,10 @@ pub struct TurnManager {
     state: TurnState,
     speech_started_at: Option<OffsetDateTime>,
     latest_frontend_hint: Option<bool>,
+    /// Set when a turn commits; STT partials inside the grace window are
+    /// decoder-flush echo (the STT engine keeps emitting buffered words after
+    /// its own boundary finalize) and must not count as barge-in.
+    committed_at: Option<OffsetDateTime>,
 }
 
 impl TurnManager {
@@ -30,7 +34,16 @@ impl TurnManager {
             state: TurnState::Idle,
             speech_started_at: None,
             latest_frontend_hint: None,
+            committed_at: None,
         }
+    }
+
+    fn within_post_commit_grace(&self, now: OffsetDateTime) -> bool {
+        let grace = i64::try_from(self.strategy.commit_grace_ms).unwrap_or(500);
+        self.committed_at
+            .and_then(|committed| (now - committed).whole_milliseconds().try_into().ok())
+            .map(|elapsed_ms: i64| elapsed_ms <= grace)
+            .unwrap_or(false)
     }
 
     fn emit(session_id: SessionId, frame: TurnFrame) -> FrameEnvelope {
@@ -68,6 +81,10 @@ impl FrameProcessor for TurnManager {
             }
             Frame::Vad(VadFrame::SpeechStarted) => {
                 if matches!(self.state, TurnState::AssistantSpeaking) {
+                    if self.within_post_commit_grace(now) {
+                        // Boundary-VAD chatter right after commit — not barge-in.
+                        return Ok(out);
+                    }
                     out.push(Self::emit(
                         frame.session_id.clone(),
                         TurnFrame::Interrupted {
@@ -91,6 +108,10 @@ impl FrameProcessor for TurnManager {
             }
             Frame::Stt(SttFrame::Partial { .. }) => {
                 if matches!(self.state, TurnState::AssistantSpeaking) {
+                    if self.within_post_commit_grace(now) {
+                        // Decoder-flush echo right after commit — not barge-in.
+                        return Ok(out);
+                    }
                     out.push(Self::emit(
                         frame.session_id.clone(),
                         TurnFrame::Interrupted {
@@ -112,17 +133,20 @@ impl FrameProcessor for TurnManager {
                     ));
                     self.state = TurnState::AssistantSpeaking;
                     self.speech_started_at = None;
+                    self.committed_at = Some(now);
                 }
             }
             Frame::Turn(TurnFrame::Interrupted { .. }) => {
                 self.state = TurnState::Listening;
                 self.speech_started_at = None;
+                self.committed_at = None;
             }
             Frame::Turn(TurnFrame::AssistantStarted) => {
                 self.state = TurnState::AssistantSpeaking;
             }
             Frame::Turn(TurnFrame::AssistantFinished) => {
                 self.state = TurnState::Listening;
+                self.committed_at = None;
             }
             Frame::Lifecycle(crate::frame::LifecycleFrame::SessionEnded)
             | Frame::Lifecycle(crate::frame::LifecycleFrame::Shutdown) => {
