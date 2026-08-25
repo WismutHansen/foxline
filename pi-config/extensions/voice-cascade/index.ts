@@ -21,6 +21,8 @@ import { readFileSync } from "node:fs";
 interface TierDef {
 	url: string;
 	model: string;
+	/** "openai" = POST {url}/v1/chat/completions (default); "ollama" = POST {url}/api/chat. */
+	api?: "openai" | "ollama";
 	maxTokens?: number;
 	timeoutMs?: number;
 	extra?: Record<string, unknown>;
@@ -45,8 +47,10 @@ const DEFAULT_CHANNEL: ChannelDef = {
 	enabled: true,
 	draft: {
 		url: process.env.FOXLINE_DRAFTER_URL ?? "http://localhost:11434",
-		model: process.env.FOXLINE_DRAFTER_MODEL ?? "smollm2:135m",
-		maxTokens: Number(process.env.FOXLINE_DRAFT_MAX_TOKENS ?? 60),
+		model: process.env.FOXLINE_DRAFTER_MODEL ?? "gemma4:e2b",
+		api: "ollama" as const,
+		extra: { think: false },
+		maxTokens: Number(process.env.FOXLINE_DRAFT_MAX_TOKENS ?? 70),
 		timeoutMs: Number(process.env.FOXLINE_DRAFT_TIMEOUT_MS ?? 1500),
 		maxSentences: Number(process.env.FOXLINE_DRAFT_MAX_SENTENCES ?? 2),
 		maxInputChars: Number(process.env.FOXLINE_DRAFT_MAX_INPUT_CHARS ?? 2000),
@@ -99,24 +103,34 @@ async function chatCompletion(tier: TierDef, system: string, user: string): Prom
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), tier.timeoutMs ?? 30_000);
 	try {
-		const res = await fetch(`${tier.url}/v1/chat/completions`, {
-			method: "POST",
-			signal: controller.signal,
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				model: tier.model,
-				messages: [
-					{ role: "system", content: system },
-					{ role: "user", content: user },
-				],
-				max_tokens: tier.maxTokens ?? 256,
-				stream: false,
-				...(tier.extra ?? {}),
-			}),
-		});
+		const isOllama = tier.api === "ollama";
+		const res = await fetch(
+			isOllama ? `${tier.url}/api/chat` : `${tier.url}/v1/chat/completions`,
+			{
+				method: "POST",
+				signal: controller.signal,
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					model: tier.model,
+					messages: [
+						{ role: "system", content: system },
+						{ role: "user", content: user },
+					],
+					stream: false,
+					...(isOllama
+						? { options: { num_predict: tier.maxTokens ?? 256 }, ...(tier.extra ?? {}) }
+						: { max_tokens: tier.maxTokens ?? 256, ...(tier.extra ?? {}) }),
+				}),
+			},
+		);
 		if (!res.ok) return null;
-		const data = (await res.json()) as { choices?: { message?: { content?: string | null } }[] };
-		const text = data.choices?.[0]?.message?.content?.trim();
+		const data = (await res.json()) as {
+			choices?: { message?: { content?: string | null } }[];
+			message?: { content?: string | null };
+		};
+		const text = (
+			isOllama ? data.message?.content : data.choices?.[0]?.message?.content
+		)?.trim();
 		return text && text.length > 0 ? text : null;
 	} catch {
 		return null;
@@ -151,9 +165,9 @@ export default function voiceCascadeExtension(pi: ExtensionAPI) {
 		const text = event.text.trim();
 		if (!text || text.startsWith("/")) return { action: "continue" };
 
-		const { url, model, system, maxTokens, timeoutMs, maxSentences, maxInputChars } = CHANNEL.draft;
+		const { system, maxSentences, maxInputChars, ...tier } = { ...CHANNEL.draft };
 		const input = text.length > maxInputChars ? text.slice(0, maxInputChars) : text;
-		const raw = await chatCompletion({ url, model, maxTokens, timeoutMs }, system, input);
+		const raw = await chatCompletion(tier, system, input);
 		if (!raw) {
 			if (DEBUG) console.error("[voice-cascade] drafter failed/timeout — passing through");
 			return { action: "continue" };

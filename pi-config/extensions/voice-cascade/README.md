@@ -30,6 +30,31 @@ Gemma must run with thinking disabled or it burns the token budget in `reasoning
 before any speakable text: pass `--chat_template_kwargs '{"enable_thinking": false}'` per
 request, or start llama-server with `--reasoning-budget 0`.
 
+## Measured results (this Mac, warm)
+
+Drafter candidates on realistic voice openings (see `benchmarks/cascade_sim.py`):
+
+| model | avg | notes |
+|-------|-----|-------|
+| smollm2:135m | ~230 ms | disqualifying quality (hallucinated facts, misreads) |
+| qwen3:0.6b | — | ollama forces thinking; 0.6B can't follow /no_think; out |
+| llama3.2:latest (3B, 2024) | ~340 ms | good but ancient |
+| **gemma4:e2b (Mar 2026)** | **~515 ms** via `/api/chat` `think:false` | **default drafter** — correct, best spoken tone, same family as the speech brain |
+
+Realistic 10-turn session (gemma speech brain, thinking disabled, growing context): base
+TTFT 209–290 ms, cascade TTFT ≈ equal (+~10 ms steer prefill); drafter adds ~545 ms before
+gemma starts.
+
+**Honest verdict:** with thinking off, gemma's TTFT is already excellent, so phase-1 steer
+does NOT pay for itself in latency today — its value is tone/alignment steering plus the
+measured architecture for **phase 2**: stream the drafter's opening to TTS immediately
+(~550 ms first audio regardless of brain load) while gemma regenerates a smarter full
+answer behind it. Phase 1 also matters whenever the brain's context is large (long
+sessions, heavy system prompts), where prefill grows and the drafter keeps first audio fast.
+
+The drafter is always called as a plain completion with **no tools** — it never sees tool
+definitions and cannot call anything.
+
 ## What it does
 
 - **Drafter steer (`input` hook):** every user turn gets a one-sentence spoken opening
