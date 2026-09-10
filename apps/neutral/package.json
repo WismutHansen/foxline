@@ -1,0 +1,34 @@
+{
+  "name": "@foxline/neutral",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "start": "bun serve.mjs",
+    "preview": "bun run start",
+    "test": "bun test tests ../../packages/voice-client/src"
+  },
+  "dependencies": {
+    "@byteowlz/design-system": "file:../../../design-system/impls/shadcn-ts",
+    "@foxline/voice-client": "workspace:*",
+    "@tauri-apps/api": "^2",
+    "jsqr": "1.4.0",
+    "qrcode": "1.5.4",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^25.9.2",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.180.0",
+    "@vitejs/plugin-react": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}

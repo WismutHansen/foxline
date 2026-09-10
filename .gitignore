@@ -8,6 +8,9 @@ dist/
 # extra safeguard for generated runtime assets
 **/dist/**
 .vite/
+# Local TLS material (including CA/private keys), never app assets.
+apps/*/.cert/
+apps/neutral/.review/
 .pi/
 *.tsbuildinfo
 crates/protocol/bindings/
@@ -65,3 +68,7 @@ Temporary Items
 sessions/
 CLAUDE.md
 benchmarks/
+# Tauri generated platform projects (regenerate via tauri ios init / android init)
+apps/*/src-tauri/gen/
+apps/*/src-tauri/target/
+apps/*/src-tauri/Cargo.lock
