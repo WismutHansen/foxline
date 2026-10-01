@@ -97,7 +97,10 @@ pub struct QwenWorkerTtsAdapter {
     config: QwenWorkerConfig,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
-    events: Option<mpsc::Receiver<FrameEnvelope>>,
+    // Keep request generation attached across the async queue. Active requests
+    // may already be removed by AudioDone before cancellation reaches us.
+    events: Option<mpsc::Receiver<(u64, FrameEnvelope)>>,
+    generation: u64,
     next_request_id: u32,
     active: Arc<Mutex<HashMap<u32, ActiveTtsRequest>>>,
     trace: Option<TraceWriter>,
@@ -105,6 +108,7 @@ pub struct QwenWorkerTtsAdapter {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ActiveTtsRequest {
+    generation: u64,
     session_id: SessionId,
     sample_rate_hz: u32,
 }
@@ -116,6 +120,7 @@ impl QwenWorkerTtsAdapter {
             child: None,
             stdin: None,
             events: None,
+            generation: 0,
             next_request_id: 1,
             active: Arc::new(Mutex::new(HashMap::new())),
             trace: None,
@@ -184,7 +189,7 @@ impl QwenWorkerTtsAdapter {
                             };
                             for out in qwen_output_to_frames(&request.session_id, &request, &frame)
                             {
-                                if tx.send(out).await.is_err() {
+                                if tx.send((request.generation, out)).await.is_err() {
                                     return;
                                 }
                             }
@@ -233,6 +238,7 @@ impl TtsAdapter for QwenWorkerTtsAdapter {
         self.active.lock().await.insert(
             request_id,
             ActiveTtsRequest {
+                generation: self.generation,
                 session_id: session_id.clone(),
                 sample_rate_hz: self.config.output_sample_rate_hz,
             },
@@ -252,11 +258,13 @@ impl TtsAdapter for QwenWorkerTtsAdapter {
     }
 
     async fn cancel(&mut self, session_id: SessionId) -> Result<FrameEnvelope> {
-        let ids: Vec<u32> = self.active.lock().await.keys().copied().collect();
+        // Fence before any I/O: the producer may already hold a cloned request,
+        // or Done may have removed it while its audio remains in the queue.
+        self.generation = self.generation.wrapping_add(1);
+        let ids: Vec<u32> = self.active.lock().await.drain().map(|(id, _)| id).collect();
         for request_id in ids {
             self.send_worker_frame(WORKER_INPUT_CANCEL, request_id, &[])
                 .await?;
-            self.active.lock().await.remove(&request_id);
         }
         if let Some(trace) = &self.trace {
             trace.event(EVENT_TTS_CANCEL_SENT, json!({}))?;
@@ -265,6 +273,8 @@ impl TtsAdapter for QwenWorkerTtsAdapter {
     }
 
     async fn shutdown(&mut self) -> Result<()> {
+        self.generation = self.generation.wrapping_add(1);
+        self.active.lock().await.clear();
         if self.stdin.is_some() {
             let _ = self.send_worker_frame(WORKER_INPUT_SHUTDOWN, 0, &[]).await;
         }
@@ -277,11 +287,23 @@ impl TtsAdapter for QwenWorkerTtsAdapter {
     }
 
     fn try_next_frame(&mut self) -> Option<FrameEnvelope> {
-        self.events.as_mut()?.try_recv().ok()
+        let events = self.events.as_mut()?;
+        while let Ok((generation, frame)) = events.try_recv() {
+            if generation == self.generation {
+                return Some(frame);
+            }
+        }
+        None
     }
 
     async fn next_frame(&mut self) -> Option<FrameEnvelope> {
-        self.events.as_mut()?.recv().await
+        let events = self.events.as_mut()?;
+        while let Some((generation, frame)) = events.recv().await {
+            if generation == self.generation {
+                return Some(frame);
+            }
+        }
+        None
     }
 }
 
@@ -373,6 +395,10 @@ pub fn ensure_supported_tts_backend(name: &str) -> Result<()> {
         other => bail!("unsupported TTS backend {other}"),
     }
 }
+
+#[cfg(test)]
+#[path = "tts_generation_tests.rs"]
+mod generation_tests;
 
 #[cfg(test)]
 mod tests {
@@ -482,6 +508,7 @@ mod tests {
 
     fn request(session_id: &SessionId) -> ActiveTtsRequest {
         ActiveTtsRequest {
+            generation: 0,
             session_id: session_id.clone(),
             sample_rate_hz: 24_000,
         }
