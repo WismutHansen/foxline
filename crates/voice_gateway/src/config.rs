@@ -21,8 +21,11 @@ pub struct Cli {
     #[arg(long, env = "FOXLINE_GATEWAY_DEBUG_TRACES")]
     pub debug_traces: Option<bool>,
 
-    #[arg(long)]
+    #[arg(long, conflicts_with = "print_loadout_schema")]
     pub print_config_schema: bool,
+
+    #[arg(long)]
+    pub print_loadout_schema: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

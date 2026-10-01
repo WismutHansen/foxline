@@ -58,6 +58,14 @@ impl Default for LifecycleLoadout {
 pub struct AdapterLoadout {
     pub stt: String,
     pub tts: String,
+    pub kokorox: Option<KokoroxWorkerLoadout>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct KokoroxWorkerLoadout {
+    /// Absolute executable path or a program name resolved on PATH.
+    pub worker: String,
 }
 
 impl Default for AdapterLoadout {
@@ -67,6 +75,7 @@ impl Default for AdapterLoadout {
             // Native spqx worker: same protocol and voice quality as
             // qwen3-worker, 0.3s model load vs 2.3s, faster first audio.
             tts: "rust-mlx".to_string(),
+            kokorox: None,
         }
     }
 }

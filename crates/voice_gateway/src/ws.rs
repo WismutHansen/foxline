@@ -28,7 +28,7 @@ use crate::{
         AudioFrame, BrainFrame, Frame, FrameEnvelope, FrontendToolFrame, InterruptReason,
         LifecycleFrame, SessionId, SttFrame, TtsFrame, TurnFrame, VadFrame,
     },
-    loadout::LoadoutResolver,
+    loadout::{AdapterLoadout, LoadoutResolver},
     persona::{PersonaRegistry, ResolvedPersona, VoiceReference},
     pipeline::{default_pipeline, LinearPipeline},
     stt::{
@@ -287,7 +287,7 @@ async fn handle_connection(
                             }
                         };
                         let mut tts_adapter = match build_tts_adapter(
-                            &resolved.loadout.adapters.tts,
+                            &resolved.loadout.adapters,
                             &resolved_persona,
                         ) {
                             Ok(adapter) => adapter,
@@ -310,7 +310,8 @@ async fn handle_connection(
                                 "source": resolved.source.as_ref().map(|path| path.display().to_string()),
                                 "extensions": resolved.extension_paths.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
                                 "stt": resolved.loadout.adapters.stt,
-                                "tts": resolved.loadout.adapters.tts,
+                                "tts": tts_adapter.backend_name(),
+                                "tts_configured": resolved.loadout.adapters.tts,
                                 "prewarm": resolved.loadout.lifecycle.prewarm,
                                 "keep_warm_ms": resolved.loadout.lifecycle.keep_warm_ms,
                                 "frontend_tools": negotiated_tools,
@@ -677,7 +678,7 @@ async fn resolve_switch_target(
     let identity = brain_handle.lock().await.identity().clone();
     let stt_adapter =
         build_stt_adapter(&resolved.loadout.adapters.stt).map_err(|err| err.to_string())?;
-    let mut tts_adapter = build_tts_adapter(&resolved.loadout.adapters.tts, &resolved_persona)
+    let mut tts_adapter = build_tts_adapter(&resolved.loadout.adapters, &resolved_persona)
         .map_err(|err| err.to_string())?;
     tts_adapter.prewarm().await.map_err(|err| err.to_string())?;
     let canned = CannedSpeech::from_persona(&resolved_persona).map_err(|err| err.to_string())?;
@@ -1167,7 +1168,7 @@ async fn drain_adapter_frames(
     loop {
         let frame = tts.as_deref_mut().and_then(TtsAdapter::try_next_frame);
         let Some(frame) = frame else { break };
-        let mut no_tts = None;
+        // Poll returns an owned frame; no adapter borrow crosses the await.
         handle_runtime_frame(
             ws,
             pipeline,
@@ -1176,7 +1177,7 @@ async fn drain_adapter_frames(
             debug_traces,
             live,
             brain,
-            &mut no_tts,
+            tts,
             frame,
         )
         .await?;
@@ -1211,7 +1212,11 @@ async fn handle_runtime_frame(
     if let Some((event, data)) = stt_trace_event(&frame) {
         trace.event(event, data)?;
     }
-    if let Some((event, data)) = qwen_worker_trace_event(&frame) {
+    if let Some((event, mut data)) = qwen_worker_trace_event(&frame) {
+        data["backend"] = json!(tts
+            .as_ref()
+            .map(|adapter| adapter.backend_name())
+            .unwrap_or("unknown"));
         trace.event(event, data)?;
     }
     let frames = process_pipeline_outputs(ws, pipeline, trace, avatar_router, frame).await?;
@@ -1452,7 +1457,7 @@ async fn handle_runtime_frame(
             Frame::Audio(AudioFrame::OutputPcm { bytes, .. }) => {
                 trace.event(
                     EVENT_FRONTEND_AUDIO_PLAY_SCHEDULED,
-                    json!({ "bytes": bytes.len() }),
+                    json!({ "bytes": bytes.len(), "source": "tts", "backend": tts.as_ref().map(|adapter| adapter.backend_name()).unwrap_or("unknown") }),
                 )?;
                 ws.send(Message::Binary(bytes.to_vec())).await?;
             }
@@ -1567,15 +1572,28 @@ fn build_stt_adapter(name: &str) -> Result<Box<dyn SttAdapter>> {
     Ok(Box::new(ParakeetSileroSttAdapter::new(config)))
 }
 
-fn build_tts_adapter(name: &str, persona: &ResolvedPersona) -> Result<Box<dyn TtsAdapter>> {
+fn build_tts_adapter(
+    adapters: &AdapterLoadout,
+    persona: &ResolvedPersona,
+) -> Result<Box<dyn TtsAdapter>> {
     // FOXLINE_TTS_BACKEND overrides the loadout's adapter name so a backend
     // can be A/B'd without editing loadouts.
-    let backend = env::var("FOXLINE_TTS_BACKEND").unwrap_or_else(|_| name.to_string());
+    let backend = env::var("FOXLINE_TTS_BACKEND").unwrap_or_else(|_| adapters.tts.clone());
     crate::tts::ensure_supported_tts_backend(&backend)?;
     let repo = repo_root();
-    let reference = voice_reference_override()
+    if backend == "kokorox" {
+        let worker_override = env::var("FOXLINE_TTS_KOKOROX_WORKER").ok();
+        let config = crate::tts_launch::kokorox_worker_config(
+            adapters,
+            persona,
+            &repo,
+            worker_override.as_deref(),
+        )?;
+        return Ok(Box::new(QwenWorkerTtsAdapter::new(config)));
+    }
+    let reference = voice_reference_override()?
         .or_else(|| persona.voice.clone())
-        .with_context(|| format!("Persona {:?} has no voice reference", persona.id))?;
+        .with_context(|| format!("Persona {:?} has no spqx voice reference for {backend:?}; configure [voice.spqx] or legacy reference fields", persona.id))?;
     let sample_rate = env::var("CODEC_TTS_WORKER_SAMPLE_RATE")
         .ok()
         .and_then(|value| value.parse::<u32>().ok())
@@ -1653,6 +1671,7 @@ fn build_tts_adapter(name: &str, persona: &ResolvedPersona) -> Result<Box<dyn Tt
     }
     let mut config = QwenWorkerConfig::new(command, args, repo);
     config.output_sample_rate_hz = sample_rate;
+    config.backend = backend;
     Ok(Box::new(QwenWorkerTtsAdapter::new(config)))
 }
 
@@ -1880,7 +1899,7 @@ fn hf_snapshot_path(model_id: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 fn resolve_voice_reference(persona: &str, workspace: &Path, repo: &Path) -> Result<VoiceReference> {
-    voice_reference_override()
+    voice_reference_override()?
         .or_else(|| {
             PersonaRegistry::new_with_data_root(repo, repo.join(".test-xdg-personas"))
                 .resolve(persona, workspace)
@@ -1890,17 +1909,25 @@ fn resolve_voice_reference(persona: &str, workspace: &Path, repo: &Path) -> Resu
         .with_context(|| format!("Persona {persona:?} has no voice reference"))
 }
 
-fn voice_reference_override() -> Option<VoiceReference> {
+fn voice_reference_override() -> Result<Option<VoiceReference>> {
     let wav = env::var("FOXLINE_TTS_REF_AUDIO")
         .or_else(|_| env::var("CODEC_TTS_REF_AUDIO"))
-        .ok()?;
+        .ok();
     let txt = env::var("FOXLINE_TTS_REF_TEXT_FILE")
         .or_else(|_| env::var("CODEC_TTS_REF_TEXT_FILE"))
-        .ok()?;
-    Some(VoiceReference {
-        wav: PathBuf::from(wav),
-        txt: PathBuf::from(txt),
-    })
+        .ok();
+    voice_reference_override_values(wav, txt)
+}
+
+fn voice_reference_override_values(
+    wav: Option<String>,
+    txt: Option<String>,
+) -> Result<Option<VoiceReference>> {
+    match (wav, txt) {
+        (None, None) => Ok(None),
+        (Some(wav), Some(txt)) => Ok(Some(VoiceReference { wav: PathBuf::from(wav), txt: PathBuf::from(txt) })),
+        _ => anyhow::bail!("TTS reference overrides require both audio and transcript; no Persona fallback for an incomplete override"),
+    }
 }
 
 fn repo_root() -> PathBuf {
@@ -2155,6 +2182,22 @@ mod tests {
             normalize_tts_text(text).as_deref(),
             Some("NVIDIA NGC API paths. 200-Festangestellte bleiben relevant. code block omitted.")
         );
+    }
+
+    #[test]
+    fn incomplete_reference_overrides_fail_instead_of_falling_back() {
+        assert!(super::voice_reference_override_values(Some("audio.wav".into()), None).is_err());
+        assert!(super::voice_reference_override_values(None, Some("text.txt".into())).is_err());
+        assert!(super::voice_reference_override_values(None, None)
+            .unwrap()
+            .is_none());
+        let reference = super::voice_reference_override_values(
+            Some("audio.wav".into()),
+            Some("text.txt".into()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(reference.wav, PathBuf::from("audio.wav"));
     }
 
     #[test]

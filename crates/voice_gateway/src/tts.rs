@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -6,7 +6,7 @@ use bytes::Bytes;
 use serde_json::json;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    process::{Child, ChildStdin, Command},
+    process::{Child, ChildStdin, ChildStdout},
     sync::{mpsc, Mutex},
 };
 
@@ -14,6 +14,9 @@ use crate::{
     frame::{AudioFrame, Frame, FrameEnvelope, SessionId, TtsFrame},
     trace::{TraceWriter, EVENT_TTS_AUDIO_START, EVENT_TTS_CANCEL_SENT, EVENT_TTS_REQUEST_START},
 };
+
+#[path = "tts_process.rs"]
+mod process;
 
 pub const WORKER_INPUT_SPEAK: u8 = 1;
 pub const WORKER_INPUT_CANCEL: u8 = 2;
@@ -24,9 +27,13 @@ pub const WORKER_OUTPUT_AUDIO_CHUNK: u8 = 3;
 pub const WORKER_OUTPUT_AUDIO_DONE: u8 = 4;
 pub const WORKER_OUTPUT_ERROR: u8 = 5;
 pub const FRAME_HEADER_BYTES: usize = 9;
+pub const MAX_WORKER_PAYLOAD_BYTES: usize = 1024 * 1024;
 
 #[async_trait]
 pub trait TtsAdapter: Send {
+    fn backend_name(&self) -> &str {
+        "unknown"
+    }
     async fn prewarm(&mut self) -> Result<()>;
     async fn speak(&mut self, session_id: SessionId, text: String) -> Result<FrameEnvelope>;
     async fn cancel(&mut self, session_id: SessionId) -> Result<FrameEnvelope>;
@@ -41,6 +48,8 @@ pub struct QwenWorkerConfig {
     pub args: Vec<String>,
     pub cwd: PathBuf,
     pub output_sample_rate_hz: u32,
+    pub backend: String,
+    pub startup_timeout: Duration,
 }
 
 impl QwenWorkerConfig {
@@ -50,6 +59,8 @@ impl QwenWorkerConfig {
             args,
             cwd: cwd.into(),
             output_sample_rate_hz: 24_000,
+            backend: "qwen3-worker".into(),
+            startup_timeout: Duration::from_secs(120),
         }
     }
 }
@@ -79,6 +90,9 @@ impl WorkerFrame {
         let request_id = u32::from_le_bytes(buffer[1..5].try_into().expect("slice length"));
         let payload_len =
             u32::from_le_bytes(buffer[5..9].try_into().expect("slice length")) as usize;
+        if payload_len > MAX_WORKER_PAYLOAD_BYTES {
+            bail!("TTS worker payload exceeds {MAX_WORKER_PAYLOAD_BYTES} bytes");
+        }
         let frame_len = FRAME_HEADER_BYTES + payload_len;
         if buffer.len() < frame_len {
             return Ok(None);
@@ -133,69 +147,44 @@ impl QwenWorkerTtsAdapter {
     }
 
     pub async fn start(&mut self) -> Result<()> {
-        if self.child.is_some() {
+        if let Some(child) = &mut self.child {
+            if self
+                .events
+                .as_ref()
+                .is_some_and(|events| events.is_closed())
+            {
+                bail!("{} TTS worker stdout reader stopped", self.config.backend);
+            }
+            if let Some(status) = child.try_wait()? {
+                bail!("{} TTS worker exited: {status}", self.config.backend);
+            }
             return Ok(());
         }
-        let mut child = Command::new(&self.config.command)
-            .args(&self.config.args)
-            .current_dir(&self.config.cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| {
-                format!(
-                    "launch Qwen TTS worker {} {:?}",
-                    self.config.command, self.config.args
-                )
-            })?;
-        let stdin = child
-            .stdin
-            .take()
-            .context("Qwen worker stdin unavailable")?;
-        let mut stdout = child
-            .stdout
-            .take()
-            .context("Qwen worker stdout unavailable")?;
+        let process::WorkerProcess {
+            child,
+            stdin,
+            mut stdout,
+            mut buffer,
+        } = process::spawn_ready_worker(&self.config).await?;
         let (tx, rx) = mpsc::channel(128);
         let active = Arc::clone(&self.active);
-
         tokio::spawn(async move {
-            let mut buffer = Vec::new();
-            let mut chunk = [0_u8; 8192];
-            loop {
-                let read = match stdout.read(&mut chunk).await {
-                    Ok(0) | Err(_) => return,
-                    Ok(read) => read,
-                };
-                buffer.extend_from_slice(&chunk[..read]);
-                loop {
-                    match WorkerFrame::decode(&mut buffer) {
-                        Ok(Some(frame)) if frame.frame_type == WORKER_OUTPUT_READY => {}
-                        Ok(Some(frame)) => {
-                            let request = {
-                                let mut active = active.lock().await;
-                                let request = active.get(&frame.request_id).cloned();
-                                if matches!(
-                                    frame.frame_type,
-                                    WORKER_OUTPUT_AUDIO_DONE | WORKER_OUTPUT_ERROR
-                                ) {
-                                    active.remove(&frame.request_id);
-                                }
-                                request
-                            };
-                            let Some(request) = request else {
-                                continue;
-                            };
-                            for out in qwen_output_to_frames(&request.session_id, &request, &frame)
-                            {
-                                if tx.send((request.generation, out)).await.is_err() {
-                                    return;
-                                }
-                            }
-                        }
-                        Ok(None) => break,
-                        Err(_) => return,
+            if let Err(error) = pump_worker_output(&mut stdout, &mut buffer, &active, &tx).await {
+                let pending: Vec<_> = active
+                    .lock()
+                    .await
+                    .drain()
+                    .map(|(_, request)| request)
+                    .collect();
+                for request in pending {
+                    let out = FrameEnvelope::new(
+                        request.session_id,
+                        Frame::Tts(TtsFrame::Error {
+                            message: format!("TTS worker output failed: {error:#}"),
+                        }),
+                    );
+                    if tx.send((request.generation, out)).await.is_err() {
+                        break;
                     }
                 }
             }
@@ -217,7 +206,7 @@ impl QwenWorkerTtsAdapter {
         let stdin = self
             .stdin
             .as_mut()
-            .context("Qwen worker stdin not started")?;
+            .context("TTS worker stdin not started")?;
         stdin
             .write_all(&WorkerFrame::encode(frame_type, request_id, payload))
             .await?;
@@ -228,29 +217,40 @@ impl QwenWorkerTtsAdapter {
 
 #[async_trait]
 impl TtsAdapter for QwenWorkerTtsAdapter {
+    fn backend_name(&self) -> &str {
+        &self.config.backend
+    }
+
     async fn prewarm(&mut self) -> Result<()> {
         self.start().await
     }
 
     async fn speak(&mut self, session_id: SessionId, text: String) -> Result<FrameEnvelope> {
+        self.start().await?;
         let request_id = self.next_request_id;
         self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
+        if let Some(trace) = &self.trace {
+            trace.event(
+                EVENT_TTS_REQUEST_START,
+                json!({ "request_id": request_id, "text_chars": text.chars().count(), "backend": self.config.backend }),
+            )?;
+        }
         self.active.lock().await.insert(
             request_id,
             ActiveTtsRequest {
                 generation: self.generation,
                 session_id: session_id.clone(),
-                sample_rate_hz: self.config.output_sample_rate_hz,
+                // The worker's audio_start, not config or ready, is authoritative.
+                sample_rate_hz: 0,
             },
         );
-        if let Some(trace) = &self.trace {
-            trace.event(
-                EVENT_TTS_REQUEST_START,
-                json!({ "request_id": request_id, "text_chars": text.chars().count() }),
-            )?;
+        if let Err(error) = self
+            .send_worker_frame(WORKER_INPUT_SPEAK, request_id, text.as_bytes())
+            .await
+        {
+            self.active.lock().await.remove(&request_id);
+            return Err(error);
         }
-        self.send_worker_frame(WORKER_INPUT_SPEAK, request_id, text.as_bytes())
-            .await?;
         Ok(FrameEnvelope::new(
             session_id,
             Frame::Tts(TtsFrame::RequestStart { text }),
@@ -275,6 +275,9 @@ impl TtsAdapter for QwenWorkerTtsAdapter {
     async fn shutdown(&mut self) -> Result<()> {
         self.generation = self.generation.wrapping_add(1);
         self.active.lock().await.clear();
+        // Each process owns its request map. A late EOF from the old reader
+        // must not drain requests accepted after a shutdown/restart.
+        self.active = Arc::new(Mutex::new(HashMap::new()));
         if self.stdin.is_some() {
             let _ = self.send_worker_frame(WORKER_INPUT_SHUTDOWN, 0, &[]).await;
         }
@@ -304,6 +307,105 @@ impl TtsAdapter for QwenWorkerTtsAdapter {
             }
         }
         None
+    }
+}
+
+async fn read_worker_frame(
+    stdout: &mut ChildStdout,
+    buffer: &mut Vec<u8>,
+) -> Result<Option<WorkerFrame>> {
+    loop {
+        if let Some(frame) = WorkerFrame::decode(buffer)? {
+            validate_worker_output(&frame)?;
+            return Ok(Some(frame));
+        }
+        let mut chunk = [0_u8; 8192];
+        let count = stdout
+            .read(&mut chunk)
+            .await
+            .context("read TTS worker stdout")?;
+        if count == 0 {
+            if !buffer.is_empty() {
+                bail!("truncated TTS worker frame at EOF");
+            }
+            return Ok(None);
+        }
+        buffer.extend_from_slice(&chunk[..count]);
+    }
+}
+
+fn validate_worker_output(frame: &WorkerFrame) -> Result<()> {
+    match frame.frame_type {
+        WORKER_OUTPUT_READY if frame.request_id == 0 && frame.payload.is_empty() => Ok(()),
+        WORKER_OUTPUT_AUDIO_START if frame.request_id != 0 && frame.payload.len() == 4 => {
+            let rate = u32::from_le_bytes(frame.payload[..].try_into().expect("checked length"));
+            if rate == 0 {
+                bail!("TTS worker sample rate must be positive");
+            }
+            Ok(())
+        }
+        WORKER_OUTPUT_AUDIO_CHUNK
+            if frame.request_id != 0 && frame.payload.len().is_multiple_of(2) =>
+        {
+            Ok(())
+        }
+        WORKER_OUTPUT_AUDIO_DONE if frame.request_id != 0 && frame.payload.is_empty() => Ok(()),
+        WORKER_OUTPUT_ERROR => {
+            std::str::from_utf8(&frame.payload).context("TTS worker error must be UTF-8")?;
+            Ok(())
+        }
+        other => bail!(
+            "invalid TTS worker output frame {other} (id {}, {} bytes)",
+            frame.request_id,
+            frame.payload.len()
+        ),
+    }
+}
+
+async fn pump_worker_output(
+    stdout: &mut ChildStdout,
+    buffer: &mut Vec<u8>,
+    active: &Arc<Mutex<HashMap<u32, ActiveTtsRequest>>>,
+    tx: &mpsc::Sender<(u64, FrameEnvelope)>,
+) -> Result<()> {
+    loop {
+        let frame = read_worker_frame(stdout, buffer)
+            .await?
+            .context("TTS worker closed stdout")?;
+        if frame.frame_type == WORKER_OUTPUT_READY {
+            bail!("unexpected repeated ready from TTS worker");
+        }
+        if frame.frame_type == WORKER_OUTPUT_ERROR && frame.request_id == 0 {
+            bail!(
+                "TTS worker fatal error: {}",
+                String::from_utf8_lossy(&frame.payload)
+            );
+        }
+        let request = {
+            let mut active = active.lock().await;
+            let Some(request) = active.get_mut(&frame.request_id) else {
+                continue;
+            };
+            if frame.frame_type == WORKER_OUTPUT_AUDIO_START {
+                request.sample_rate_hz =
+                    u32::from_le_bytes(frame.payload[..].try_into().expect("validated length"));
+            } else if frame.frame_type == WORKER_OUTPUT_AUDIO_CHUNK && request.sample_rate_hz == 0 {
+                bail!("TTS worker sent PCM before audio_start");
+            }
+            let request = request.clone();
+            if matches!(
+                frame.frame_type,
+                WORKER_OUTPUT_AUDIO_DONE | WORKER_OUTPUT_ERROR
+            ) {
+                active.remove(&frame.request_id);
+            }
+            request
+        };
+        for out in qwen_output_to_frames(&request.session_id, &request, &frame) {
+            if tx.send((request.generation, out)).await.is_err() {
+                return Ok(());
+            }
+        }
     }
 }
 
@@ -358,7 +460,7 @@ pub(crate) fn qwen_output_to_frames(
             vec![FrameEnvelope::new(
                 session_id.clone(),
                 Frame::Tts(TtsFrame::Error {
-                    message: format!("unknown Qwen worker output frame type {other}"),
+                    message: format!("unknown TTS worker output frame type {other}"),
                 }),
             )]
         }
@@ -388,7 +490,7 @@ pub fn ensure_supported_tts_backend(name: &str) -> Result<()> {
         // qwen3-worker: python MLX worker (services/qwen3_tts_worker.py).
         // rust-mlx: native spqx worker (pibot-tts-worker), byte-identical
         // binary protocol; see ws.rs build_tts_adapter for launch resolution.
-        "qwen3-worker" | "rust-mlx" => Ok(()),
+        "qwen3-worker" | "rust-mlx" | "kokorox" => Ok(()),
         "rust-candle" | "cpp-ggml" | "elevenlabs" | "openai" => {
             bail!("TTS backend {name} is reserved but not implemented yet")
         }
@@ -502,8 +604,41 @@ mod tests {
     #[test]
     fn backend_selection_names_are_explicit() {
         assert!(ensure_supported_tts_backend("qwen3-worker").is_ok());
+        assert!(ensure_supported_tts_backend("rust-mlx").is_ok());
+        assert!(ensure_supported_tts_backend("kokorox").is_ok());
         assert!(ensure_supported_tts_backend("openai").is_err());
         assert!(ensure_supported_tts_backend("unknown").is_err());
+    }
+
+    #[test]
+    fn worker_wire_contract_has_raw_text_and_bounded_payloads() {
+        let encoded = WorkerFrame::encode(super::WORKER_INPUT_SPEAK, 42, "Grüße".as_bytes());
+        assert_eq!(&encoded[..9], &[1, 42, 0, 0, 0, 7, 0, 0, 0]);
+        assert_eq!(&encoded[9..], "Grüße".as_bytes());
+        let mut oversized = vec![3, 1, 0, 0, 0];
+        oversized.extend_from_slice(&((super::MAX_WORKER_PAYLOAD_BYTES + 1) as u32).to_le_bytes());
+        assert!(WorkerFrame::decode(&mut oversized).is_err());
+    }
+
+    #[test]
+    fn invalid_output_shapes_are_rejected() {
+        for (kind, id, payload) in [
+            (1, 0, vec![0; 4]),
+            (1, 1, vec![]),
+            (2, 1, vec![]),
+            (2, 1, vec![0; 4]),
+            (3, 1, vec![1]),
+            (4, 1, vec![0]),
+            (5, 0, vec![255]),
+            (99, 1, vec![]),
+        ] {
+            assert!(super::validate_worker_output(&WorkerFrame {
+                frame_type: kind,
+                request_id: id,
+                payload: Bytes::from(payload)
+            })
+            .is_err());
+        }
     }
 
     fn request(session_id: &SessionId) -> ActiveTtsRequest {

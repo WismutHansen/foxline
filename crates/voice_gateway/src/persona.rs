@@ -14,13 +14,24 @@ pub struct VoiceReference {
     pub txt: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct KokoroxVoice {
+    pub model: PathBuf,
+    pub voices: PathBuf,
+    pub voice: String,
+    pub language: String,
+    pub speed: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedPersona {
     pub id: String,
     pub root: PathBuf,
     pub prompt: Option<String>,
     pub digest: String,
+    /// Explicit spqx mapping, or compatible legacy reference fields.
     pub voice: Option<VoiceReference>,
+    pub kokorox_voice: Option<KokoroxVoice>,
     pub canned: BTreeMap<String, PathBuf>,
 }
 
@@ -39,10 +50,38 @@ struct PersonaManifest {
     canned: BTreeMap<String, CannedGroup>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct VoiceManifest {
     reference_audio: Option<String>,
     reference_text: Option<String>,
+    spqx: Option<ReferenceManifest>,
+    kokorox: Option<KokoroxManifest>,
+    // Retain existing descriptive metadata and voice.variants arrays. Unknown
+    // table-valued sections are rejected instead of hiding misspelled engines.
+    #[serde(flatten)]
+    metadata: BTreeMap<String, toml::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReferenceManifest {
+    reference_audio: String,
+    reference_text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KokoroxManifest {
+    model: String,
+    voices: String,
+    voice: String,
+    language: String,
+    #[serde(default = "default_speed")]
+    speed: f32,
+}
+
+fn default_speed() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,6 +187,14 @@ fn safe_relative(root: &Path, value: &str, field: &str) -> Result<PathBuf> {
 }
 
 fn resolve_package(id: &str, root: PathBuf) -> Result<ResolvedPersona> {
+    // Worker cwd is independent of the selected Work Directory.
+    let root = if root.is_absolute() {
+        root
+    } else {
+        std::env::current_dir()
+            .context("resolve Persona package root")?
+            .join(root)
+    };
     let manifest_path = root.join("persona.toml");
     let manifest_bytes = if manifest_path.exists() {
         fs::read(&manifest_path).with_context(|| format!("read {}", manifest_path.display()))?
@@ -175,22 +222,7 @@ fn resolve_package(id: &str, root: PathBuf) -> Result<ResolvedPersona> {
         Some(String::from_utf8(prompt_bytes.clone()).context("PROMPT.md is not UTF-8")?)
     };
 
-    let voice = if let Some(voice) = manifest.voice {
-        match (voice.reference_audio, voice.reference_text) {
-            (Some(wav), Some(text)) => {
-                let wav = safe_relative(&root, &wav, "voice.reference_audio")?;
-                let text = safe_relative(&root, &text, "voice.reference_text")?;
-                if !wav.is_file() || !text.is_file() {
-                    bail!("Persona {id:?} voice reference requires existing audio and transcript files");
-                }
-                Some(VoiceReference { wav, txt: text })
-            }
-            (None, None) => legacy_voice_reference(&root),
-            _ => bail!("Persona {id:?} voice reference_audio and reference_text must be configured together"),
-        }
-    } else {
-        legacy_voice_reference(&root)
-    };
+    let (voice, kokorox_voice) = resolve_voices(id, &root, manifest.voice.unwrap_or_default())?;
 
     let mut canned = BTreeMap::new();
     for (event, group) in manifest.canned {
@@ -219,7 +251,88 @@ fn resolve_package(id: &str, root: PathBuf) -> Result<ResolvedPersona> {
         prompt,
         digest,
         voice,
+        kokorox_voice,
         canned,
+    })
+}
+
+fn resolve_voices(
+    id: &str,
+    root: &Path,
+    voice: VoiceManifest,
+) -> Result<(Option<VoiceReference>, Option<KokoroxVoice>)> {
+    for (section, value) in &voice.metadata {
+        if value.is_table() {
+            bail!("Persona {id:?} has unknown voice section {section:?}");
+        }
+    }
+    let explicit = voice.spqx.is_some() || voice.kokorox.is_some();
+    let legacy = match (voice.reference_audio, voice.reference_text) {
+        (Some(wav), Some(txt)) => Some(resolve_reference(root, &wav, &txt, "voice")?),
+        (None, None) => None,
+        _ => bail!(
+            "Persona {id:?} voice reference_audio and reference_text must be configured together"
+        ),
+    };
+    let reference = match voice.spqx {
+        Some(mapping) => Some(resolve_reference(
+            root,
+            &mapping.reference_audio,
+            &mapping.reference_text,
+            "voice.spqx",
+        )?),
+        None => legacy.or_else(|| {
+            if explicit {
+                None
+            } else {
+                legacy_voice_reference(root)
+            }
+        }),
+    };
+    let kokorox = voice
+        .kokorox
+        .map(|mapping| resolve_kokorox_voice(root, mapping))
+        .transpose()?;
+    Ok((reference, kokorox))
+}
+
+fn resolve_reference(root: &Path, wav: &str, txt: &str, section: &str) -> Result<VoiceReference> {
+    Ok(VoiceReference {
+        wav: existing_asset(root, wav, &format!("{section}.reference_audio"))?,
+        txt: existing_asset(root, txt, &format!("{section}.reference_text"))?,
+    })
+}
+
+fn existing_asset(root: &Path, value: &str, field: &str) -> Result<PathBuf> {
+    let path = safe_relative(root, value, field)?;
+    if !path.is_file() {
+        bail!("Persona {field} requires an existing file: {value:?}");
+    }
+    Ok(path)
+}
+
+fn resolve_kokorox_voice(root: &Path, mapping: KokoroxManifest) -> Result<KokoroxVoice> {
+    if mapping.voice.trim().is_empty()
+        || mapping.voice.chars().any(char::is_whitespace)
+        || mapping.voice.contains('+')
+    {
+        bail!("voice.kokorox.voice must be a single explicit voice id (mixing unsupported)");
+    }
+    if mapping.language.trim().is_empty()
+        || mapping.language == "auto"
+        || mapping.language.starts_with("zh")
+    {
+        bail!("voice.kokorox.language must explicitly select a v1.0-vocabulary language; auto/Chinese v1.1 unsupported");
+    }
+    if !mapping.speed.is_finite() || mapping.speed <= 0.0 {
+        bail!("voice.kokorox.speed must be finite and positive");
+    }
+    Ok(KokoroxVoice {
+        model: existing_asset(root, &mapping.model, "voice.kokorox.model")?,
+        voices: existing_asset(root, &mapping.voices, "voice.kokorox.voices")?,
+        voice: mapping.voice,
+        language: mapping.language,
+        speed: mapping.speed,
     })
 }
 
@@ -249,12 +362,19 @@ fn legacy_voice_reference(root: &Path) -> Option<VoiceReference> {
             .into_iter()
             .find(|candidate| candidate.is_file());
             if let Some(text) = text {
-                return Some(VoiceReference { wav, txt: text });
+                // Legacy discovery is not a path-confinement bypass.
+                let wav = wav.strip_prefix(root).ok()?.to_str()?;
+                let txt = text.strip_prefix(root).ok()?.to_str()?;
+                return resolve_reference(root, wav, txt, "voice").ok();
             }
         }
     }
     None
 }
+
+#[cfg(test)]
+#[path = "persona_voice_tests.rs"]
+mod voice_tests;
 
 #[cfg(test)]
 mod tests {

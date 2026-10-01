@@ -94,6 +94,14 @@ gateway-check:
 gateway-test:
     cargo test -p foxline-voice-gateway
 
+# Print the loadout JSON schema for TOML validation/LSP integration.
+gateway-loadout-schema:
+    cargo run -p foxline-voice-gateway -- --print-loadout-schema
+
+# Requires explicit local worker/model/NPZ assets (see docs/tts-engine-verification.md).
+gateway-kokorox-test:
+    cargo test -p foxline-voice-gateway --lib real_kokorox_persona_worker_turn_cancel_and_recovery -- --ignored --nocapture
+
 # Run the gateway with segment tracing on, e.g. `just gateway-debug-tts`
 gateway-debug-tts *args:
     FOXLINE_GATEWAY_DEBUG_TRACES=true cargo run -p foxline-voice-gateway -- {{args}}

@@ -12,5 +12,6 @@ pub mod think_block_filter;
 pub mod tools;
 pub mod trace;
 pub mod tts;
+mod tts_launch;
 pub mod turn;
 pub mod ws;

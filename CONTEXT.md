@@ -17,7 +17,7 @@ A Pi-backed working identity rooted in a workspace and Pi configuration, optiona
 _Avoid_: Character, persona
 
 **Persona**:
-The gateway-owned spoken identity of a Voice Session: display name, `PROMPT.md`, TTS voice reference, and optional canned spoken responses. A Frontend Skin maps the Persona id to its own client-local presentation; portraits, animations, and other visual assets are not part of the gateway Persona.
+The gateway-owned spoken identity of a Voice Session: display name, `PROMPT.md`, engine-specific TTS voice mappings (spqx reference audio/transcript or kokorox model/NPZ/named voice), and optional canned spoken responses. A Frontend Skin maps the Persona id to its own client-local presentation; portraits, animations, and other visual assets are not part of the gateway Persona.
 _Avoid_: Agent, Character, avatar package
 
 Personas can change within a frontend session without changing the Pi-backed Agent. Agent switching changes the Brain/workspace/loadout identity; Persona switching changes prompt, voice, and canned speech. Persona packages install under the Foxline XDG data directory and may be overridden inside a Work Directory.

@@ -20,6 +20,16 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    if cli.print_loadout_schema {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&schemars::schema_for!(
+                foxline_voice_gateway::loadout::VoiceLoadout
+            ))?
+        );
+        return Ok(());
+    }
+
     let config = GatewayConfig::load(&cli)?;
     ws::serve(config).await
 }
