@@ -13,6 +13,13 @@ trx close <id> --reason "Done" --json         # Complete work
 
 Priorities: 0=critical, 1=high, 2=medium (default), 3=low, 4=backlog
 
+## Product Priority
+
+- Local open-model voice interaction is the primary target, including app-level coordination of existing Agent sessions.
+- GPT-Live or other hosted speech-to-speech providers may be optional integrations, never a core dependency or implicit fallback.
+- Acceptance must prove the complete local STT, Pi-backed reasoning/control, and TTS path without hosted credentials or public-network inference. Evaluate English and German, real playback, interruption, and session-target correctness; component speed alone is not conversational proof.
+- Keep speech services independently consumable. Preserve gateway turn/session authority, the Pi Brain path, and explicit authorization when routing across sessions. New provider boundaries require an ADR.
+
 ## Architecture Context
 
 - Read `CONTEXT.md` for the project glossary before changing architecture or naming core concepts.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Clarified the product priority: local open-model voice and app-level session coordination come first (`fxl-kzkj`, `fxl-8bqh`). Acceptance must prove the complete local speech/Brain/control/playback path without hosted credentials or public-network inference. GPT-Live may be optional, never a core dependency or implicit fallback. Guidance and proof requirements only; runtime support is not newly implemented.
+
 - Accepted and corrected ADR 0012: spqx (MLX/tch) and kokorox (ONNX) remain separate engines behind one worker contract (raw UTF-8 speak, empty ready, sample rate in audio_start), a reference HTTP dialect (`spqx-wr4b`) and explicit Persona voice mapping (`fxl-00hv`). The native kokorox worker is implemented in its repository (`kokorox-7ngw`); Foxline adapter wiring remains `fxl-8bht`. License/provenance review (`kokorox-8j45`) is required before any relicensing or distribution-compliance claim; a subprocess alone does not settle it. Controlled off-Mac Qwen benchmarking is `spqx-wzrp`. No Foxline runtime behavior changes yet.
 
 - Specified (not yet shipped) work-directory pairing in ADR 0011: `foxline pair` must grant selected-directory past chats and voice sessions with Oqto-compatible durable Session IDs and Runner-backed history, while `oqto-sandbox` confines the agent process separately from phone authentication. The current Mac Oqto runner provides read-only history but not live chat attachment; server enrollment and physical phone voice remain open.
